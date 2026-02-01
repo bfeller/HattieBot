@@ -1,0 +1,27 @@
+# Deploy from pre-built image (GitHub: bfeller/hattiebot)
+# Copy to docker-compose.yml for local use, or use: docker compose -f docker-compose.deploy.yml up
+# Image: ghcr.io/bfeller/hattiebot (GitHub Container Registry)
+# Set EMBEDDING_SERVICE_URL and EMBEDDING_SERVICE_API_KEY to use a self-hosted embedding service (e.g. EmbeddingGood).
+services:
+  hattiebot:
+    image: ghcr.io/bfeller/hattiebot:latest
+    container_name: hattiebot
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    environment:
+      - HATTIEBOT_CONFIG_DIR=/data
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - HATTIEBOT_MODEL=${HATTIEBOT_MODEL:-}
+      - HATTIEBOT_BOT_NAME=${HATTIEBOT_BOT_NAME:-HattieBot}
+      - ZULIP_URL=${ZULIP_URL:-}
+      - ZULIP_EMAIL=${ZULIP_EMAIL:-}
+      - ZULIP_KEY=${ZULIP_KEY:-}
+      - EMBEDDING_SERVICE_URL=${EMBEDDING_SERVICE_URL:-}
+      - EMBEDDING_SERVICE_API_KEY=${EMBEDDING_SERVICE_API_KEY:-}
+      - HATTIEBOT_EMBEDDING_DIMENSION=${HATTIEBOT_EMBEDDING_DIMENSION:-768}
+    volumes:
+      - ./data:/data
+      - .:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /workspace

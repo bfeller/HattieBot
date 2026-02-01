@@ -1,0 +1,6 @@
+{
+  "name": "example_submind",
+  "system_prompt": "You are a focused sub-mind. Accomplish the given task using only the allowed tools.",
+  "allowed_tools": ["read_file", "list_dir"],
+  "max_turns": 10
+}

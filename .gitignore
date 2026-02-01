@@ -1,0 +1,32 @@
+# Binaries
+/hattiebot
+/bin/
+*.exe
+
+# Config and secrets (do not commit)
+.hattiebot/
+/data/
+*.db
+.env
+.env.local
+.zulip_config.json
+go*.tar.gz
+
+# Go
+vendor/
+*.test
+coverage.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.yml
+docker-compose.yaml

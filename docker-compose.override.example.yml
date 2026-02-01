@@ -1,0 +1,14 @@
+# Example override for a personal embedding service (e.g. embedding.bfs5.com)
+# Copy to docker-compose.override.yml or merge into your docker-compose.yml.
+# Do NOT commit your API key: use .env (gitignored) and set EMBEDDING_SERVICE_API_KEY there.
+#
+# Usage:
+#   1. cp docker-compose.override.example.yml docker-compose.override.yml
+#   2. Add EMBEDDING_SERVICE_API_KEY=your-key to .env (or export it)
+#   3. docker compose -f docker-compose.demo.yml up
+#      (override will set EMBEDDING_SERVICE_URL and pass through API key from env)
+services:
+  hattiebot:
+    environment:
+      - EMBEDDING_SERVICE_URL=https://embedding.bfs5.com
+      - EMBEDDING_SERVICE_API_KEY=${EMBEDDING_SERVICE_API_KEY}

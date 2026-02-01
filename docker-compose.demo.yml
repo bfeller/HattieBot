@@ -1,0 +1,50 @@
+# DEMO CONFIGURATION — single stack (HattieBot + EmbeddingGood)
+# Copy this file to docker-compose.yml to run locally.
+#
+# Run HattieBot in Docker. Mount /data for DB and config, /workspace for agent files.
+# First boot: run once, enter API key/model/description in TUI. Data persists in ./data.
+#
+# Embedding service: build image from https://github.com/bfeller/EmbeddingGood first:
+#   git clone https://github.com/bfeller/EmbeddingGood.git ../EmbeddingGood && cd ../EmbeddingGood && docker build -t embeddinggood:latest .
+# Or set EMBEDDING_SERVICE_URL to an existing EmbeddingGood instance and leave embeddinggood service out.
+services:
+  embeddinggood:
+    image: embeddinggood:latest
+    container_name: embeddinggood
+    restart: unless-stopped
+    environment:
+      - API_KEYS=${EMBEDDING_SERVICE_API_KEY:-demo-key}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - MODEL_ID=${EMBEDDING_GOOD_MODEL_ID:-google/embeddinggemma-300m}
+    volumes:
+      - embedding_hf_cache:/root/.cache/huggingface
+    ports:
+      - "8000:8000"
+
+  hattiebot:
+    build: .
+    container_name: hattiebot
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    depends_on:
+      - embeddinggood
+    environment:
+      - HATTIEBOT_CONFIG_DIR=/data
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - HATTIEBOT_MODEL=${HATTIEBOT_MODEL:-}
+      - HATTIEBOT_BOT_NAME=${HATTIEBOT_BOT_NAME:-HattieBot}
+      - ZULIP_URL=${ZULIP_URL:-}
+      - ZULIP_EMAIL=${ZULIP_EMAIL:-}
+      - ZULIP_KEY=${ZULIP_KEY:-}
+      - EMBEDDING_SERVICE_URL=http://embeddinggood:8000
+      - EMBEDDING_SERVICE_API_KEY=${EMBEDDING_SERVICE_API_KEY:-demo-key}
+      - HATTIEBOT_EMBEDDING_DIMENSION=${HATTIEBOT_EMBEDDING_DIMENSION:-768}
+    volumes:
+      - ./data:/data
+      - .:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock # Enable DooD (Sandboxing)
+    working_dir: /workspace
+
+volumes:
+  embedding_hf_cache:
