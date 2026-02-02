@@ -36,10 +36,13 @@ func (db *DB) GetOrCreateUser(ctx context.Context, id, name, platform string) (*
 		name = "User " + id // Fallback name
 	}
 	role := "user" // Default role
-	
+	trustLevel := "trusted"
+	if platform == "nextcloud_talk" {
+		trustLevel = "restricted" // New Nextcloud users require admin approval
+	}
 	_, err = db.ExecContext(ctx,
-		`INSERT INTO users (id, name, role, platform) VALUES (?, ?, ?, ?)`,
-		id, name, role, platform,
+		`INSERT INTO users (id, name, role, platform, trust_level) VALUES (?, ?, ?, ?, ?)`,
+		id, name, role, platform, trustLevel,
 	)
 	if err != nil {
 		return nil, err

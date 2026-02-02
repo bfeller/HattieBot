@@ -73,31 +73,7 @@ func RunFirstBoot(cfg *config.Config) error {
 	riskAccepted := true
 
 	fmt.Println()
-	fmt.Print("Configure Zulip now? (y/n) [n]: ")
-	flush()
-	scan.Scan()
-	configZulip := strings.ToLower(strings.TrimSpace(scan.Text())) == "y"
-	
-	var zulipURL, zulipEmail, zulipKey string
-	if configZulip {
-		fmt.Print("Zulip Site URL (e.g. https://chat.zulip.org): ")
-		flush()
-		scan.Scan()
-		zulipURL = strings.TrimSpace(scan.Text())
-
-		fmt.Print("Zulip Bot Email: ")
-		flush()
-		scan.Scan()
-		zulipEmail = strings.TrimSpace(scan.Text())
-
-		fmt.Print("Zulip Bot API Key: ")
-		flush()
-		scan.Scan()
-		zulipKey = strings.TrimSpace(scan.Text())
-	}
-
-	fmt.Println()
-	fmt.Println("Once connected, tell me about the bot:")
+	fmt.Println("Tell me about the bot:")
 	flush()
 
 	fmt.Print("What is the bot's name? ")
@@ -139,31 +115,18 @@ func RunFirstBoot(cfg *config.Config) error {
 	}
 
 	fmt.Println()
-	defaultAdmin := "admin"
-	if zulipEmail != "" {
-		// If using Zulip, user ID is typically email. But we want the Admin's email, not the bot's.
-		// Asking user to provide it.
-		defaultAdmin = "" 
-	}
-	fmt.Printf("Primary/Admin User ID (who owns this bot?): ")
+	fmt.Print("Primary/Admin User ID (who owns this bot?) [admin]: ")
 	flush()
 	scan.Scan()
 	adminID := strings.TrimSpace(scan.Text())
 	if adminID == "" {
-		if defaultAdmin != "" {
-			adminID = defaultAdmin
-		} else {
-			return fmt.Errorf("admin user ID is required")
-		}
+		adminID = "admin"
 	}
 
 	fmt.Println("Saving config and generating SOUL.md...")
 	if err := store.SaveConfigFile(cfg.ConfigDir, &store.ConfigFile{
 		OpenRouterAPIKey: apiKey,
 		Model:            model,
-		ZulipURL:         zulipURL,
-		ZulipEmail:       zulipEmail,
-		ZulipKey:         zulipKey,
 		AgentName:        name,
 		WorkspaceDir:     workspaceDir,
 		RiskAccepted:     riskAccepted,

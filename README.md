@@ -1,13 +1,13 @@
 # HattieBot
 
-Self-improving autonomous agent: OpenRouter LLMs, SQLite + sqlite-vec for memory, modular communication channels, skill installation, and context compaction. The CLI is a direct-access console; the agent core is independent so you can connect via Zulip, webhooks, or other channels.
+Self-improving autonomous agent: OpenRouter LLMs, SQLite + sqlite-vec for memory, modular communication channels, skill installation, and context compaction. The CLI is a direct-access console; the agent core is independent so you can connect via Nextcloud Talk, webhooks, or other channels.
 
 ## Features
 
 - **SOUL.md Identity**: Moltbot-inspired persona file with Core Truths, Boundaries, Vibe, and Continuity sections. Fully editable.
 - **Onboarding Wizard**: First-run setup generates `SOUL.md` from bot name, audience, and purpose. Includes risk acceptance.
 - **Skill System**: Agent can autonomously install tools via `go`, `brew`, or `npm` package managers.
-- **Multi-Channel Communication**: Modular `Channel` interface supports terminal, Zulip, webhooks, etc.
+- **Multi-Channel Communication**: Modular `Channel` interface supports terminal, Nextcloud Talk, webhooks, etc.
 - **Dynamic System Prompts**: Runtime info (time, OS, workspace, agent name) + SOUL.md injected into every prompt.
 - **Context Compaction**: Automatically summarizes old conversation turns to manage token limits.
 - **Vector Memory**: Embed and recall memories using sqlite-vec for semantic search.
@@ -39,10 +39,10 @@ docker compose -f docker-compose.demo.yml run --rm hattiebot
 On first run, you'll be prompted to configure:
 1. **OpenRouter API Key**
 2. **Model** (e.g. `moonshotai/kimi-k2.5`, `openai/gpt-4o`)
-3. **Zulip integration** (optional)
-4. **Bot name, audience, and purpose** → generates `SOUL.md`
-5. **Workspace directory** (default: `~/.hattiebot`)
-6. **Risk acceptance** (required to proceed)
+3. **Bot name, audience, and purpose** → generates `SOUL.md`
+4. **Workspace directory** (default: `~/.hattiebot`)
+5. **Risk acceptance** (required to proceed)
+6. **Admin User ID** (default: `admin`)
 
 Config, DB, and `SOUL.md` are persisted to `./data/`.
 
@@ -76,12 +76,16 @@ Config is stored in `./.hattiebot/` or `~/.config/hattiebot/`.
 | `HATTIEBOT_HEADLESS` | Set to `1` for single-turn stdin/stdout mode |
 | `HATTIEBOT_API_PORT` | Port for HTTP API (default: none) |
 | `HATTIEBOT_API_ONLY` | Set to `1` to run HTTP server only (no console) |
-| `ZULIP_URL` | Zulip site URL (e.g. `https://chat.zulip.org`) |
-| `ZULIP_EMAIL` | Zulip bot email |
-| `ZULIP_KEY` | Zulip bot API key |
 | `EMBEDDING_SERVICE_URL` | Base URL of embedding service (e.g. `http://embeddinggood:8000` or `https://embedding.bfs5.com`) |
 | `EMBEDDING_SERVICE_API_KEY` | API key for embedding service (`x-api-key` header) |
 | `HATTIEBOT_EMBEDDING_DIMENSION` | Embedding dimension: `128`, `256`, `512`, or `768` (default: `768`) |
+| `HATTIEBOT_COMPOSE_MODE` | Set to `1` for env-only setup (no interactive first-boot); used with Nextcloud stack |
+| `HATTIEBOT_DEFAULT_CHANNEL` | Default channel for proactive messages: `admin_term` or `nextcloud_talk` |
+| `HATTIEBOT_HTTP_PORT` | HTTP port for webhooks (default: `8080`) |
+| `NEXTCLOUD_URL` | Nextcloud base URL (e.g. `http://nextcloud` in compose) |
+| `NEXTCLOUD_TALK_BOT_SECRET` | Shared secret for Talk webhook bot (must match `occ talk:bot:install`) |
+| `NEXTCLOUD_ADMIN_USER` | Nextcloud admin username; used as HattieBot admin (trusted source) in compose mode |
+| `HATTIEBOT_ADMIN_USER_ID` | Override admin user ID (default: `NEXTCLOUD_ADMIN_USER` in compose mode) |
 
 ### Embedding service (vector memory)
 
@@ -158,7 +162,7 @@ docker run -d -p 8080:8080 \
 cmd/hattiebot/main.go    # Entry point, wiring
 internal/
   agent/                  # Core loop, prompts, context
-  channels/               # Communication (terminal, zulip, webhook)
+  channels/               # Communication (terminal, nextcloud_talk, webhook)
   config/                 # Runtime configuration
   gateway/                # Multi-channel message router
   memory/                 # Context compaction
@@ -247,6 +251,29 @@ docker compose -f docker-compose.demo.yml up
 ```
 
 To use an existing embedding service (e.g. `https://embedding.bfs5.com`), use [docker-compose.override.example.yml](docker-compose.override.example.yml): copy to `docker-compose.override.yml`, set `EMBEDDING_SERVICE_URL` and `EMBEDDING_SERVICE_API_KEY` in `.env` (do not commit the API key).
+
+### Nextcloud + HattieBot (single compose)
+
+[docker-compose.nextcloud.yml](docker-compose.nextcloud.yml) runs **PostgreSQL**, **Nextcloud**, and **HattieBot** in one stack. Nextcloud auto-installs from env; the Nextcloud container registers the Talk webhook bot via `occ talk:bot:install`; HattieBot waits for Nextcloud to be ready, writes its config, then starts and accepts Talk webhooks.
+
+**Requirements:** Nextcloud 32 (Talk webhook bots supported). PostgreSQL 17.
+
+1. Copy [.env.example](.env.example) to `.env` and set:
+   - `POSTGRES_PASSWORD`, `NEXTCLOUD_ADMIN_USER`, `NEXTCLOUD_ADMIN_PASSWORD`, `NEXTCLOUD_TALK_BOT_SECRET`
+   - `NEXTCLOUD_TRUSTED_DOMAINS=localhost nextcloud` (include `nextcloud` so HattieBot’s bootstrap health check gets 200)
+   - `OPENROUTER_API_KEY`, `HATTIEBOT_MODEL`, `HATTIEBOT_AUDIENCE`, `HATTIEBOT_PURPOSE`
+2. Run:
+   ```bash
+   docker compose -f docker-compose.nextcloud.yml up -d
+   ```
+3. Add the bot to a Talk room (Nextcloud Talk → room → Integrations → Add bot → HattieBot).
+4. **Trust:** The Nextcloud admin user (`NEXTCLOUD_ADMIN_USER`) is HattieBot’s trusted admin. New Nextcloud users who message the bot start as *restricted* until that admin approves them (e.g. via an approval tool or DB).
+
+**First-time flow:** Postgres and Nextcloud start; Nextcloud auto-installs; the Nextcloud entrypoint runs `occ talk:bot:install` when ready; HattieBot (compose mode) waits for Nextcloud, writes config (including AdminUserID from `NEXTCLOUD_ADMIN_USER`), then starts the gateway and HTTP server. Webhooks hit `http://hattiebot:8080/webhook/talk`. Use `.env` or Docker secrets for all secrets; do not commit them.
+
+**If Nextcloud doesn’t start:** Run `docker logs nextcloud` to see the entrypoint and post-install output (e.g. hook script errors). Port 80 must be free; use `ports: "8081:80"` in compose if 80 is in use.
+
+**401 when HattieBot sends a reply:** Ensure `NEXTCLOUD_TALK_BOT_SECRET` in `.env` matches the secret used when the bot was registered. After changing HattieBot code, rebuild the image so the running container gets the fix: `docker compose -f docker-compose.nextcloud.yml build hattiebot && docker compose -f docker-compose.nextcloud.yml up -d`.
 
 ---
 

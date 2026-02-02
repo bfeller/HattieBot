@@ -9,12 +9,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/hattiebot/hattiebot/internal/agent"
 	"github.com/hattiebot/hattiebot/internal/agent/templates"
+	"github.com/hattiebot/hattiebot/internal/bootstrap"
 	"github.com/hattiebot/hattiebot/internal/channels/admin_term"
-	"github.com/hattiebot/hattiebot/internal/channels/zulip"
+	"github.com/hattiebot/hattiebot/internal/channels/nextcloudtalk"
 	"github.com/hattiebot/hattiebot/internal/config"
 	"github.com/hattiebot/hattiebot/internal/core"
 	"github.com/hattiebot/hattiebot/internal/gateway"
@@ -28,6 +30,7 @@ import (
 	"github.com/hattiebot/hattiebot/internal/store"
 	"github.com/hattiebot/hattiebot/internal/tools"
 	"github.com/hattiebot/hattiebot/internal/tui"
+	"github.com/hattiebot/hattiebot/internal/webhookserver"
 	"github.com/hattiebot/hattiebot/internal/wiring"
 )
 
@@ -43,22 +46,62 @@ func run(cfg *config.Config) error {
 	// First boot: no config file -> run first-boot setup, then continue (don't exit)
 	cf, _ := store.LoadConfigFile(cfg.ConfigDir)
 	if cf == nil {
-		// Optional: seed config from env for API/CI testing (no interactive first-boot)
-		if os.Getenv("HATTIEBOT_SEED_CONFIG") == "1" {
+		// Compose mode: full env-driven setup (no interactive first-boot)
+		if os.Getenv("HATTIEBOT_COMPOSE_MODE") == "1" {
 			apiKey := os.Getenv("OPENROUTER_API_KEY")
 			model := os.Getenv("HATTIEBOT_MODEL")
 			name := os.Getenv("HATTIEBOT_BOT_NAME")
 			audience := os.Getenv("HATTIEBOT_AUDIENCE")
 			purpose := os.Getenv("HATTIEBOT_PURPOSE")
+			adminID := os.Getenv("HATTIEBOT_ADMIN_USER_ID")
+			if adminID == "" {
+				adminID = os.Getenv("NEXTCLOUD_ADMIN_USER")
+			}
 			if apiKey != "" && model != "" && name != "" && audience != "" && purpose != "" {
-				if err := store.SaveConfigFile(cfg.ConfigDir, &store.ConfigFile{OpenRouterAPIKey: apiKey, Model: model, AgentName: name}); err != nil {
-					return fmt.Errorf("seed config: %w", err)
+				seed := &store.ConfigFile{
+					OpenRouterAPIKey: apiKey,
+					Model:            model,
+					AgentName:       name,
+					AdminUserID:     adminID,
 				}
-				// Generate SOUL.md from env vars
+				if err := store.SaveConfigFile(cfg.ConfigDir, seed); err != nil {
+					return fmt.Errorf("compose seed config: %w", err)
+				}
 				if err := agent.WriteSoul(cfg.ConfigDir, name, audience, purpose); err != nil {
-					return fmt.Errorf("seed SOUL.md: %w", err)
+					return fmt.Errorf("compose SOUL.md: %w", err)
+				}
+				nextcloudURL := os.Getenv("NEXTCLOUD_URL")
+				nextcloudSecret := os.Getenv("NEXTCLOUD_TALK_BOT_SECRET")
+				if nextcloudURL != "" && nextcloudSecret != "" {
+					if err := bootstrap.WaitForNextcloud(nextcloudURL, 5*time.Minute, 15*time.Second); err != nil {
+						return fmt.Errorf("nextcloud bootstrap: %w", err)
+					}
+					botUser := os.Getenv("NEXTCLOUD_BOT_USER")
+					botPass := os.Getenv("NEXTCLOUD_BOT_APP_PASSWORD")
+					if err := bootstrap.WriteNextcloudConfig(cfg.ConfigDir, nextcloudURL, nextcloudSecret, botUser, botPass); err != nil {
+						return fmt.Errorf("write nextcloud config: %w", err)
+					}
 				}
 				cf, _ = store.LoadConfigFile(cfg.ConfigDir)
+			}
+		}
+		if cf == nil {
+			// Optional: seed config from env for API/CI testing (no interactive first-boot)
+			if os.Getenv("HATTIEBOT_SEED_CONFIG") == "1" {
+				apiKey := os.Getenv("OPENROUTER_API_KEY")
+				model := os.Getenv("HATTIEBOT_MODEL")
+				name := os.Getenv("HATTIEBOT_BOT_NAME")
+				audience := os.Getenv("HATTIEBOT_AUDIENCE")
+				purpose := os.Getenv("HATTIEBOT_PURPOSE")
+				if apiKey != "" && model != "" && name != "" && audience != "" && purpose != "" {
+					if err := store.SaveConfigFile(cfg.ConfigDir, &store.ConfigFile{OpenRouterAPIKey: apiKey, Model: model, AgentName: name}); err != nil {
+						return fmt.Errorf("seed config: %w", err)
+					}
+					if err := agent.WriteSoul(cfg.ConfigDir, name, audience, purpose); err != nil {
+						return fmt.Errorf("seed SOUL.md: %w", err)
+					}
+					cf, _ = store.LoadConfigFile(cfg.ConfigDir)
+				}
 			}
 		}
 		if cf == nil {
@@ -77,9 +120,6 @@ func run(cfg *config.Config) error {
 	// Load API key and model from config file (overrides env)
 	cfg.OpenRouterAPIKey = cf.OpenRouterAPIKey
 	cfg.Model = cf.Model
-	cfg.ZulipURL = cf.ZulipURL
-	cfg.ZulipEmail = cf.ZulipEmail
-	cfg.ZulipKey = cf.ZulipKey
 	cfg.AgentName = cf.AgentName
 	cfg.AdminUserID = cf.AdminUserID
 	if cf.EmbeddingServiceURL != "" {
@@ -91,17 +131,20 @@ func run(cfg *config.Config) error {
 	if cf.EmbeddingDimension > 0 {
 		cfg.EmbeddingDimension = cf.EmbeddingDimension
 	}
+	cfg.NextcloudURL = cf.NextcloudURL
+	cfg.NextcloudTalkBotSecret = cf.NextcloudTalkBotSecret
+	cfg.NextcloudBotUser = cf.NextcloudBotUser
+	cfg.NextcloudBotAppPassword = cf.NextcloudBotAppPassword
+	if cf.NextcloudURL != "" || cf.NextcloudTalkBotSecret != "" {
+		if cfg.DefaultChannel == "" {
+			cfg.DefaultChannel = "nextcloud_talk"
+		}
+	}
+	if cf.DefaultChannel != "" {
+		cfg.DefaultChannel = cf.DefaultChannel
+	}
 
 	// Fallback to env vars if config file missing them
-	if cfg.ZulipURL == "" {
-		cfg.ZulipURL = os.Getenv("ZULIP_URL")
-	}
-	if cfg.ZulipEmail == "" {
-		cfg.ZulipEmail = os.Getenv("ZULIP_EMAIL")
-	}
-	if cfg.ZulipKey == "" {
-		cfg.ZulipKey = os.Getenv("ZULIP_KEY")
-	}
 	if cfg.OpenRouterAPIKey == "" {
 		cfg.OpenRouterAPIKey = os.Getenv("OPENROUTER_API_KEY")
 	}
@@ -113,6 +156,24 @@ func run(cfg *config.Config) error {
 	}
 	if cfg.EmbeddingServiceAPIKey == "" {
 		cfg.EmbeddingServiceAPIKey = os.Getenv("EMBEDDING_SERVICE_API_KEY")
+	}
+	if cfg.NextcloudURL == "" {
+		cfg.NextcloudURL = os.Getenv("NEXTCLOUD_URL")
+	}
+	// Prefer env for Talk bot secret so Docker/compose .env is single source of truth (must match occ talk:bot:install).
+	if v := os.Getenv("NEXTCLOUD_TALK_BOT_SECRET"); v != "" {
+		cfg.NextcloudTalkBotSecret = v
+	} else if cfg.NextcloudTalkBotSecret == "" {
+		cfg.NextcloudTalkBotSecret = os.Getenv("NEXTCLOUD_TALK_BOT_SECRET")
+	}
+	if cfg.NextcloudBotUser == "" {
+		cfg.NextcloudBotUser = os.Getenv("NEXTCLOUD_BOT_USER")
+	}
+	if cfg.NextcloudBotAppPassword == "" {
+		cfg.NextcloudBotAppPassword = os.Getenv("NEXTCLOUD_BOT_APP_PASSWORD")
+	}
+	if cfg.DefaultChannel == "" && os.Getenv("HATTIEBOT_DEFAULT_CHANNEL") != "" {
+		cfg.DefaultChannel = os.Getenv("HATTIEBOT_DEFAULT_CHANNEL")
 	}
 	if cfg.OpenRouterAPIKey == "" {
 		return fmt.Errorf("OpenRouter API key not set: add to config or set OPENROUTER_API_KEY")
@@ -146,7 +207,7 @@ func run(cfg *config.Config) error {
 	var client core.LLMClient
 	routingCfg, _ := store.LoadLLMRouting(cfg.ConfigDir)
 	if routingCfg != nil && routingCfg.HasDefaultRoute() {
-		bootstrap := openrouter.NewClient(cfg.OpenRouterAPIKey, cfg.Model)
+		bootstrap := openrouter.NewClient(cfg.OpenRouterAPIKey, cfg.Model, cfg.ConfigDir)
 		client = llmrouter.NewRouterClient(routingCfg, bootstrap, cfg.ConfigDir, nil)
 	} else {
 		client = wiring.LoadClient(sysCfg.LLMClient, cfg.OpenRouterAPIKey, cfg.Model)
@@ -230,15 +291,40 @@ func run(cfg *config.Config) error {
 	// 1. Admin Terminal Channel
 	gw.Register(adminterm.New())
 
-	// 2. Zulip Channel (if configured)
-	gw.Register(zulip.New(zulip.Config{
-		SiteURL: cfg.ZulipURL,
-		Email:   cfg.ZulipEmail,
-		APIKey:  cfg.ZulipKey,
-	}))
+	// 2. Nextcloud Talk Channel (if configured); webhooks received via HTTP server
+	if cfg.NextcloudURL != "" && cfg.NextcloudTalkBotSecret != "" {
+		gw.Register(nextcloudtalk.New(nextcloudtalk.Config{
+			BaseURL: cfg.NextcloudURL,
+			Secret:  cfg.NextcloudTalkBotSecret,
+		}))
+		httpPort := 8080
+		if p := os.Getenv("HATTIEBOT_HTTP_PORT"); p != "" {
+			if n, err := strconv.Atoi(p); err == nil && n > 0 {
+				httpPort = n
+			}
+		}
+		if p := os.Getenv("HATTIEBOT_API_PORT"); p != "" && os.Getenv("HATTIEBOT_HTTP_PORT") == "" {
+			if n, err := strconv.Atoi(p); err == nil && n > 0 {
+				httpPort = n
+			}
+		}
+		webhookSrv := &webhookserver.Server{
+			Addr:            fmt.Sprintf(":%d", httpPort),
+			NextcloudSecret: cfg.NextcloudTalkBotSecret,
+			PushIngress:     gw.PushIngress,
+		}
+		go func() {
+			if err := webhookSrv.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "webhook server: %v\n", err)
+			}
+		}()
+	}
 
-	// 3. Router and Escalation Monitor for proactive messaging
+	// 4. Router and Escalation Monitor for proactive messaging
 	router := gateway.NewRouter(gw, db)
+	if cfg.DefaultChannel != "" {
+		router.DefaultChannel = cfg.DefaultChannel
+	}
 	escalationMonitor := &scheduler.EscalationMonitor{
 		DB:     db,
 		Router: router,

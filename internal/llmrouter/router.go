@@ -96,7 +96,7 @@ func (r *RouterClient) getClient(route string) (core.LLMClient, error) {
         if apiKey == "" {
             return nil, nil
         }
-        client = openrouter.NewClient(apiKey, routeEntry.Model)
+        client = openrouter.NewClient(apiKey, routeEntry.Model, r.configDir)
     } else {
         // Generic Provider lookup
         tmpl, ok := r.Registry.GetTemplate(providerEntry.Type)

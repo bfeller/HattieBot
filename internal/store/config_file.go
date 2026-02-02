@@ -11,10 +11,6 @@ import (
 type ConfigFile struct {
 	OpenRouterAPIKey string `json:"openrouter_api_key,omitempty"`
 	Model            string `json:"model,omitempty"`
-	ZulipURL         string `json:"zulip_url,omitempty"`
-	ZulipEmail       string `json:"zulip_email,omitempty"`
-	ZulipKey         string `json:"zulip_key,omitempty"`
-
 	// New fields for Agentic Upgrade
 	AgentName    string `json:"agent_name,omitempty"`
 	WorkspaceDir string `json:"workspace_dir,omitempty"`
@@ -25,6 +21,13 @@ type ConfigFile struct {
 	EmbeddingServiceURL   string `json:"embedding_service_url,omitempty"`
 	EmbeddingServiceAPIKey string `json:"embedding_service_api_key,omitempty"`
 	EmbeddingDimension   int    `json:"embedding_dimension,omitempty"`
+
+	// Nextcloud (Talk webhook, optional Files/Passwords)
+	NextcloudURL           string `json:"nextcloud_url,omitempty"`
+	NextcloudTalkBotSecret string `json:"nextcloud_talk_bot_secret,omitempty"`
+	NextcloudBotUser       string `json:"nextcloud_bot_user,omitempty"`
+	NextcloudBotAppPassword string `json:"nextcloud_bot_app_password,omitempty"`
+	DefaultChannel          string `json:"default_channel,omitempty"`
 }
 
 // LoadConfigFile reads config from dir/config.json. Missing file returns nil, nil.

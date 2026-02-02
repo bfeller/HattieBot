@@ -151,4 +151,4 @@ Ensure `bin/echo` exists: `go build -o bin/echo ./tools/echo`
 - **First boot (testing script):** The script wipes `./data` (config, system_purpose.txt, DB). You're prompted for: OpenRouter API key, model, then the bot's name, who it's talking to, and its purpose. That is cleaned by the LLM and saved to `system_purpose.txt`. Then chat starts.
 
 
-I want to talk to you via zulip. i have it hosted at chat.1bf.ca and your api key is kuh9vqy22EjIp4pcwG1xHKELPke3wH9n and your email is hattie-bot@chat.1bf.ca can you set yourself up to automatically reply to all messages in the #Hattie channel I have in there.
+(Example: "Add the HattieBot bot to a Nextcloud Talk room and ask it to reply there." See README Nextcloud + HattieBot deployment.)

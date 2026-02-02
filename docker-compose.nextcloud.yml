@@ -1,0 +1,82 @@
+# Nextcloud + HattieBot: single compose (PostgreSQL, Nextcloud, HattieBot).
+# Usage: copy .env.example to .env, set required vars, then:
+#   docker compose -f docker-compose.nextcloud.yml up -d
+# Nextcloud 32 (Talk webhook bots supported). PostgreSQL 17.
+# HattieBot waits for Nextcloud to be ready, then writes config and starts; Nextcloud
+# registers the Talk bot via post-installation hook (occ talk:bot:install).
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: nextcloud-db
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nextcloud}
+      POSTGRES_USER: ${POSTGRES_USER:-nextcloud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - nextcloud_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nextcloud} -d ${POSTGRES_DB:-nextcloud}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nextcloud:
+    image: nextcloud:32
+    container_name: nextcloud
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:?set NEXTCLOUD_ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:?set NEXTCLOUD_ADMIN_PASSWORD}
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${POSTGRES_DB:-nextcloud}
+      POSTGRES_USER: ${POSTGRES_USER:-nextcloud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      NEXTCLOUD_TRUSTED_DOMAINS: ${NEXTCLOUD_TRUSTED_DOMAINS:-localhost nextcloud}
+      NEXTCLOUD_TALK_BOT_SECRET: ${NEXTCLOUD_TALK_BOT_SECRET:?set NEXTCLOUD_TALK_BOT_SECRET}
+      NEXTCLOUD_TALK_BOT_NAME: ${NEXTCLOUD_TALK_BOT_NAME:-HattieBot}
+      NEXTCLOUD_TALK_BOT_URL: ${NEXTCLOUD_TALK_BOT_URL:-http://hattiebot:8080/webhook/talk}
+      NEXTCLOUD_TALK_BOT_DESCRIPTION: ${NEXTCLOUD_TALK_BOT_DESCRIPTION:-HattieBot agent}
+    volumes:
+      - nextcloud_data:/var/www/html
+      - ./scripts/nextcloud-post-install.sh:/docker-entrypoint-hooks.d/post-installation/99-register-talk-bot.sh:ro
+    ports:
+      - "80:80"
+
+  hattiebot:
+    build: .
+    image: hattiebot:latest
+    container_name: hattiebot
+    restart: unless-stopped
+    depends_on:
+      - nextcloud
+    env_file: .env
+    environment:
+      HATTIEBOT_CONFIG_DIR: /data
+      HATTIEBOT_COMPOSE_MODE: "1"
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY}
+      HATTIEBOT_MODEL: ${HATTIEBOT_MODEL:?set HATTIEBOT_MODEL}
+      HATTIEBOT_BOT_NAME: ${HATTIEBOT_BOT_NAME:-HattieBot}
+      HATTIEBOT_AUDIENCE: ${HATTIEBOT_AUDIENCE:?set HATTIEBOT_AUDIENCE}
+      HATTIEBOT_PURPOSE: ${HATTIEBOT_PURPOSE:?set HATTIEBOT_PURPOSE}
+      NEXTCLOUD_URL: http://nextcloud
+      NEXTCLOUD_TALK_BOT_SECRET: ${NEXTCLOUD_TALK_BOT_SECRET:?set NEXTCLOUD_TALK_BOT_SECRET}
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:?set NEXTCLOUD_ADMIN_USER}
+      HATTIEBOT_HTTP_PORT: "8080"
+    volumes:
+      - hattiebot_data:/data
+      - .:/workspace
+    ports:
+      - "8080:8080"
+    working_dir: /workspace
+
+volumes:
+  nextcloud_db:
+  nextcloud_data:
+  hattiebot_data:

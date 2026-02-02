@@ -16,7 +16,7 @@ import (
 
 func init() {
 	registry.RegisterClient("default", func(apiKey, model string) (core.LLMClient, error) {
-		return NewClient(apiKey, model), nil
+		return NewClient(apiKey, model, ""), nil
 	})
 }
 
@@ -88,17 +88,20 @@ type ChatResponse struct {
 
 // Client calls OpenRouter API.
 type Client struct {
-	APIKey string
-	Model  string
-	HTTP   *http.Client
+	APIKey    string
+	Model     string
+	HTTP      *http.Client
+	ConfigDir string // optional: when set, provider failures are persisted and consulted for time-limited provider.ignore
 }
 
-// NewClient creates a client with the given API key and model.
-func NewClient(apiKey, model string) *Client {
+// NewClient creates a client with the given API key, model, and optional config dir for provider-failure tracking.
+// configDir can be "" to disable persistence; when set, failed providers are excluded until their cooldown expires.
+func NewClient(apiKey, model, configDir string) *Client {
 	return &Client{
-		APIKey: apiKey,
-		Model:  model,
-		HTTP:   http.DefaultClient,
+		APIKey:    apiKey,
+		Model:     model,
+		HTTP:      http.DefaultClient,
+		ConfigDir: configDir,
 	}
 }
 

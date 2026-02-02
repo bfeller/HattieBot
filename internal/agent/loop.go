@@ -17,6 +17,24 @@ import (
 	"github.com/hattiebot/hattiebot/internal/tools"
 )
 
+// isProviderValidationError returns true for OpenRouter "Provider returned error" 400s due to
+// provider-specific validation (e.g. reasoning_content, thinking) so we can retry with truncated context.
+func isProviderValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	if !strings.Contains(s, "Provider returned error") || !strings.Contains(s, "HTTP 400") {
+		return false
+	}
+	return strings.Contains(s, "reasoning_content") ||
+		strings.Contains(s, "thinking") ||
+		strings.Contains(s, "invalid_request_error")
+}
+
+// maxMessagesBeforeTruncationRetry is the message count above which we truncate and retry on provider validation error.
+const maxMessagesBeforeTruncationRetry = 28
+
 // Loop runs the agent: messages (system + full history + new user msg) -> OpenRouter with tools -> execute tool_calls -> repeat until no tool_calls -> save and return.
 type Loop struct {
 	Config          *config.Config
@@ -186,15 +204,26 @@ func (l *Loop) RunOneTurn(ctx context.Context, msg gateway.Message) (assistantCo
 
 	toolDefs := tools.BuiltinToolDefs()
     
-    // Retry limits
-    maxRetries := 2
-    retries := 0
+    // Empty-response retries: count consecutive empty model replies; reset after any successful tool execution.
+    const maxEmptyRetries = 2
+    emptyRetries := 0
+    // Safety cap for total turns per user message (avoid runaway loops).
+    const maxTotalTurns = 50
+    totalTurns := 0
+    // One retry with truncated context on OpenRouter "Provider returned error" (e.g. reasoning_content/thinking).
+    truncationRetryDone := false
 
     var content string
     var toolCalls []openrouter.ToolCall
 
 TurnLoop:
 	for {
+        totalTurns++
+        if totalTurns > maxTotalTurns {
+            log.Printf("[AGENT] Max turns (%d) reached for this request.", maxTotalTurns)
+            content = "I hit the turn limit for this request. Please try a shorter or simpler ask, or break it into separate messages."
+            break TurnLoop
+        }
         useTools := true
         // Inner Tool Loop
         for {
@@ -204,16 +233,33 @@ TurnLoop:
                 log.Printf("[AGENT] ChatCompletionWithTools returned: content_len=%d, toolCalls=%d, err=%v", len(content), len(toolCalls), err)
                 if err != nil {
                     // Only fallback to non-tool mode if the error indicates tools aren't supported.
+                    // Do NOT treat "Invalid tool call" / "invalid JSON" (bad request) as unsupported—provider does support tools.
                     errStr := err.Error()
-                    isToolNotSupported := strings.Contains(errStr, "does not support tools") ||
-                        strings.Contains(errStr, "tool_calls") ||
-                        strings.Contains(errStr, "function_call")
+                    isBadRequest := strings.Contains(errStr, "Invalid tool call") || strings.Contains(errStr, "invalid JSON")
+                    isToolNotSupported := !isBadRequest && (
+                        strings.Contains(errStr, "does not support tools") ||
+                            strings.Contains(errStr, "tool_calls") ||
+                            strings.Contains(errStr, "function_call"))
                     if isToolNotSupported {
                         log.Printf("[AGENT] Tool fallback triggered (model doesn't support tools): %v", err)
                         useTools = false
                         continue
                     }
-                    // Transient error
+                    // Retry once with truncated context on provider validation errors (e.g. reasoning_content/thinking).
+                    if isProviderValidationError(err) && !truncationRetryDone && len(messages) > maxMessagesBeforeTruncationRetry {
+                        keep := maxMessagesBeforeTruncationRetry - 1 // keep system + last (keep) messages
+                        if keep < 2 {
+                            keep = 2
+                        }
+                        newLen := 1 + keep
+                        if len(messages) > newLen {
+                            log.Printf("[AGENT] Provider validation error (e.g. reasoning_content); truncating to last %d messages and retrying", keep)
+                            messages = append(messages[:1], messages[len(messages)-keep:]...)
+                            truncationRetryDone = true
+                            continue
+                        }
+                    }
+                    // Transient or other error
                     log.Printf("[AGENT] API error (not tool-related), returning: %v", err)
                     return "", err
                 }
@@ -267,6 +313,8 @@ TurnLoop:
                     // Save to DB
                     l.DB.InsertMessage(ctx, "tool", result, "", "system", msg.Channel, msg.ThreadID, "", "", tc.ID)
                 }
+                // Reset empty-response counter after successful tool execution so we don't give up mid-request.
+                emptyRetries = 0
                 continue
             }
             
@@ -285,24 +333,27 @@ TurnLoop:
             break
         } // End Inner Tool Loop
 
-        // Validate Content & Self-Correct
+        // Validate Content & Self-Correct (only count consecutive empty responses; counter was reset after tool execution)
         if strings.TrimSpace(content) == "" || content == "(No text in model response; try rephrasing or a different model.)" {
-            if retries < maxRetries {
-                log.Printf("[AGENT] Empty response detected. Triggering self-correction (Attempt %d)...", retries+1)
+            if emptyRetries < maxEmptyRetries {
+                log.Printf("[AGENT] Empty response detected. Triggering self-correction (consecutive empty %d/%d)...", emptyRetries+1, maxEmptyRetries)
                 retryMsg := openrouter.Message{
                     Role: "system", 
                     Content: "You returned an empty response. Please provide a text summary of the tool results or an answer to the user. Do not output empty text. If you need to run more tools, do so.",
                 }
                 messages = append(messages, retryMsg)
-                retries++
+                emptyRetries++
                 continue TurnLoop
             }
-            // Fallback after retries
+            // Fallback after consecutive empty retries
             content = "(No text in model response; try rephrasing or a different model.)"
-            log.Printf("[AGENT] Self-correction failed after %d retries.", retries)
+            log.Printf("[AGENT] Self-correction failed after %d consecutive empty responses.", emptyRetries)
         }
         break TurnLoop
     }
+
+	// Strip inline tool-call markers so we never send raw tool syntax to the user
+	content = StripInlineToolCallMarkers(content)
 
 	// Save assistant message
 	toolCallsJSON := ""

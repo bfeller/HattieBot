@@ -14,10 +14,6 @@ type Config struct {
 	// Model is the OpenRouter model id (e.g. moonshotai/kimi-k2.5).
 	Model string
 	
-	// Zulip Configuration
-	ZulipURL   string
-	ZulipEmail string
-	ZulipKey   string
 	// ConfigDir is where config file and system_purpose.txt live (e.g. ~/.config/hattiebot or .hattiebot).
 	ConfigDir string
 	// DBPath is the path to hattiebot.db.
@@ -38,7 +34,7 @@ type Config struct {
 	TokenBudget int64
 	// AgentName is the name of the bot (loaded from config file during onboarding).
 	AgentName string
-	// AdminUserID is the ID of the trusted admin user (e.g. Zulip email or "admin").
+	// AdminUserID is the ID of the trusted admin user (e.g. Nextcloud uid or "admin").
 	AdminUserID string
 	// ToolOutputMaxRunes caps tool output length (0 = no truncation). Set via HATTIEBOT_TOOL_OUTPUT_MAX_RUNES.
 	ToolOutputMaxRunes int
@@ -47,6 +43,14 @@ type Config struct {
 	EmbeddingServiceURL   string // e.g. http://embeddinggood:8000 or https://embedding.bfs5.com
 	EmbeddingServiceAPIKey string
 	EmbeddingDimension   int    // 128, 256, 512, or 768; default 768
+
+	// Nextcloud (Talk webhook; optional Files/Passwords)
+	NextcloudURL            string
+	NextcloudTalkBotSecret  string
+	NextcloudBotUser        string
+	NextcloudBotAppPassword string
+	// DefaultChannel is used for proactive routing when no user preference (e.g. "admin_term", "nextcloud_talk").
+	DefaultChannel string
 }
 
 // DefaultConfigDir returns the default config directory (project-local .hattiebot if present, else ~/.config/hattiebot).
@@ -85,6 +89,7 @@ func New(configDir string) *Config {
 			embedDim = n
 		}
 	}
+	defaultCh := os.Getenv("HATTIEBOT_DEFAULT_CHANNEL")
 	return &Config{
 		OpenRouterAPIKey:        os.Getenv("OPENROUTER_API_KEY"),
 		Model:                  os.Getenv("HATTIEBOT_MODEL"), // can be overridden by config file
@@ -99,5 +104,10 @@ func New(configDir string) *Config {
 		EmbeddingServiceURL:    os.Getenv("EMBEDDING_SERVICE_URL"),
 		EmbeddingServiceAPIKey: os.Getenv("EMBEDDING_SERVICE_API_KEY"),
 		EmbeddingDimension:    embedDim,
+		NextcloudURL:           os.Getenv("NEXTCLOUD_URL"),
+		NextcloudTalkBotSecret: os.Getenv("NEXTCLOUD_TALK_BOT_SECRET"),
+		NextcloudBotUser:       os.Getenv("NEXTCLOUD_BOT_USER"),
+		NextcloudBotAppPassword: os.Getenv("NEXTCLOUD_BOT_APP_PASSWORD"),
+		DefaultChannel:         defaultCh,
 	}
 }

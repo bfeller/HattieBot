@@ -10,7 +10,7 @@ import (
 type Message struct {
 	SenderID   string
 	Content    string
-	Channel    string // "terminal", "zulip", etc.
+	Channel    string // "admin_term", "nextcloud_talk", etc.
 	ThreadID   string // "stream:topic", "pm:user", etc.
 	ReplyToID  string // Optional ID to reply to
 }
@@ -50,6 +50,17 @@ func (g *Gateway) Register(c Channel) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.channels[c.Name()] = c
+}
+
+// PushIngress delivers a message into the gateway from an external source (e.g. HTTP webhook).
+// It is non-blocking: if the ingress buffer is full, the message is dropped and false is returned.
+func (g *Gateway) PushIngress(msg Message) bool {
+	select {
+	case g.ingress <- msg:
+		return true
+	default:
+		return false
+	}
 }
 
 // StartAll starts all registered channels and the ingress processor
@@ -116,10 +127,11 @@ func (g *Gateway) routeReply(originalMsg Message, content string) {
 	}
 
 	reply := Message{
-		SenderID:  "hattiebot", // Self
-		Content:   content,
-		Channel:   originalMsg.Channel,
-		ReplyToID: originalMsg.ReplyToID, // Or however specific channels thread messages
+		SenderID:   "hattiebot", // Self
+		Content:    content,
+		Channel:    originalMsg.Channel,
+		ThreadID:   originalMsg.ThreadID,
+		ReplyToID:  originalMsg.ReplyToID,
 	}
 
 	if err := ch.Send(reply); err != nil {

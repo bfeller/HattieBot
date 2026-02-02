@@ -9,7 +9,6 @@
 *.db
 .env
 .env.local
-.zulip_config.json
 go*.tar.gz
 
 # Go
