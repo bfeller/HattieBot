@@ -157,7 +157,7 @@ func run(cfg *config.Config) error {
 	var embedder core.EmbeddingClient
 	embedCfg, _ := store.LoadEmbeddingRouting(cfg.ConfigDir)
 	if embedCfg != nil && embedCfg.HasDefaultProvider() {
-		embedder = embeddingrouter.NewRouter(embedCfg, llmFallback, nil)
+		embedder = embeddingrouter.NewRouter(embedCfg, llmFallback, nil, cfg.ConfigDir)
 	} else if cfg.EmbeddingServiceURL != "" && cfg.EmbeddingServiceAPIKey != "" {
 		embedder = embeddinggood.NewClient(cfg.EmbeddingServiceURL, cfg.EmbeddingServiceAPIKey, cfg.EmbeddingDimension)
 	} else {

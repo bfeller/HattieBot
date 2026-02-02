@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"sync"
 
 	"github.com/hattiebot/hattiebot/internal/core"
@@ -15,12 +16,13 @@ import (
 // RouterClient implements core.LLMClient by resolving the "default" route to a provider+model,
 // calling that client, and falling back to openrouter_bootstrap on error.
 type RouterClient struct {
-	Config   *store.LLMRoutingConfig
-	Fallback core.LLMClient
-    Registry *ProviderRegistry
-	getEnv   func(string) string
-	mu       sync.RWMutex
-	cache    map[string]core.LLMClient
+	Config    *store.LLMRoutingConfig
+	configDir string // when set, getClient() reloads config from disk and invalidates cache when config changes
+	Fallback  core.LLMClient
+	Registry  *ProviderRegistry
+	getEnv    func(string) string
+	mu        sync.RWMutex
+	cache     map[string]core.LLMClient
 }
 
 // NewRouterClient creates a RouterClient with the given routing config and fallback client.
@@ -36,16 +38,30 @@ func NewRouterClient(cfg *store.LLMRoutingConfig, fallback core.LLMClient, confi
     }
 
 	return &RouterClient{
-		Config:   cfg,
-		Fallback: fallback,
-        Registry: registry,
-		getEnv:   getEnv,
-		cache:    make(map[string]core.LLMClient),
+		Config:    cfg,
+		configDir: configDir,
+		Fallback:  fallback,
+		Registry:  registry,
+		getEnv:    getEnv,
+		cache:     make(map[string]core.LLMClient),
 	}
 }
 
 // getClient resolves route "default" to (provider, model) and returns a core.LLMClient for it.
+// When configDir is set, re-reads llm_routing.json and provider templates, and invalidates cache if config changed (hot-reload).
 func (r *RouterClient) getClient(route string) (core.LLMClient, error) {
+	// Hot-reload: re-read config from disk and clear cache if changed
+	if r.configDir != "" {
+		r.mu.Lock()
+		newCfg, err := store.LoadLLMRouting(r.configDir)
+		if err == nil && newCfg != nil && !reflect.DeepEqual(newCfg, r.Config) {
+			r.Config = newCfg
+			r.cache = make(map[string]core.LLMClient)
+			_ = r.Registry.LoadTemplates()
+		}
+		r.mu.Unlock()
+	}
+
 	if r.Config == nil {
 		return nil, nil
 	}
@@ -57,8 +73,8 @@ func (r *RouterClient) getClient(route string) (core.LLMClient, error) {
 	if !ok {
 		return nil, nil
 	}
-	
-    // Cache Check
+
+	// Cache Check
 	cacheKey := routeEntry.Provider + ":" + routeEntry.Model
 	r.mu.RLock()
 	c, ok := r.cache[cacheKey]

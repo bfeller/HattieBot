@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"reflect"
 	"sync"
 
 	"github.com/hattiebot/hattiebot/internal/core"
@@ -14,23 +15,26 @@ import (
 // Router implements core.EmbeddingClient by resolving the default provider from embedding_routing.json
 // and delegating to the corresponding EmbeddingGood client.
 type Router struct {
-	Config   *store.EmbeddingRoutingConfig
-	Fallback core.EmbeddingClient
-	getEnv   func(string) string
-	mu       sync.RWMutex
-	cache    map[string]core.EmbeddingClient
+	Config    *store.EmbeddingRoutingConfig
+	ConfigDir string // when set, getClient() reloads config from disk and invalidates cache when config changes
+	Fallback  core.EmbeddingClient
+	getEnv    func(string) string
+	mu        sync.RWMutex
+	cache     map[string]core.EmbeddingClient
 }
 
 // NewRouter creates a Router with the given config and fallback. getEnv resolves env var names; if nil, os.Getenv is used.
-func NewRouter(cfg *store.EmbeddingRoutingConfig, fallback core.EmbeddingClient, getEnv func(string) string) *Router {
+// configDir, when non-empty, enables hot-reload: getClient() will re-read embedding_routing.json and clear cache when config changes.
+func NewRouter(cfg *store.EmbeddingRoutingConfig, fallback core.EmbeddingClient, getEnv func(string) string, configDir string) *Router {
 	if getEnv == nil {
 		getEnv = os.Getenv
 	}
 	return &Router{
-		Config:   cfg,
-		Fallback: fallback,
-		getEnv:   getEnv,
-		cache:    make(map[string]core.EmbeddingClient),
+		Config:    cfg,
+		ConfigDir: configDir,
+		Fallback:  fallback,
+		getEnv:    getEnv,
+		cache:     make(map[string]core.EmbeddingClient),
 	}
 }
 
@@ -54,7 +58,19 @@ func (r *Router) Embed(ctx context.Context, text string, embedType string) ([]fl
 }
 
 // getClient returns the EmbeddingClient for the default provider; caches by provider name.
+// When ConfigDir is set, re-reads embedding_routing.json and invalidates cache if config changed (hot-reload).
 func (r *Router) getClient() (core.EmbeddingClient, error) {
+	// Hot-reload: re-read config from disk and clear cache if changed
+	if r.ConfigDir != "" {
+		r.mu.Lock()
+		newCfg, err := store.LoadEmbeddingRouting(r.ConfigDir)
+		if err == nil && newCfg != nil && !reflect.DeepEqual(newCfg, r.Config) {
+			r.Config = newCfg
+			r.cache = make(map[string]core.EmbeddingClient)
+		}
+		r.mu.Unlock()
+	}
+
 	if r.Config == nil || !r.Config.HasDefaultProvider() {
 		return nil, nil
 	}
