@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,47 +11,49 @@ import (
 // the environment or from the config dir at runtime; never committed.
 type Config struct {
 	// OpenRouterAPIKey is set from env OPENROUTER_API_KEY or from config file.
-	OpenRouterAPIKey string
+	OpenRouterAPIKey string `json:"open_router_api_key"`
 	// Model is the OpenRouter model id (e.g. moonshotai/kimi-k2.5).
-	Model string
+	Model string `json:"model"`
+	// EnvModel stores the value from HATTIEBOT_MODEL env var for fallback purposes.
+	EnvModel string `json:"-"`
 	
 	// ConfigDir is where config file and system_purpose.txt live (e.g. ~/.config/hattiebot or .hattiebot).
-	ConfigDir string
+	ConfigDir string `json:"-"` // set at runtime
 	// DBPath is the path to hattiebot.db.
-	DBPath string
+	DBPath string `json:"-"`
 	// WorkspaceDir is the working directory for terminal commands and file tools.
-	WorkspaceDir string
+	WorkspaceDir string `json:"-"`
 	// SystemPurposePath is the path to system_purpose.txt.
-	SystemPurposePath string
+	SystemPurposePath string `json:"-"`
 	// ToolsDir is where agent-created Go tool sources live (e.g. tools/ or agent_tools/).
-	ToolsDir string
+	ToolsDir string `json:"-"`
 	// BinDir is where compiled tool binaries are placed (e.g. bin/).
-	BinDir string
+	BinDir string `json:"-"`
 	// DocsDir is where architecture docs live (e.g. docs/).
-	DocsDir string
+	DocsDir string `json:"-"`
 	// RequireApprovalForNewTools when true prompts before first run of a newly registered tool.
-	RequireApprovalForNewTools bool
+	RequireApprovalForNewTools bool `json:"require_approval_for_new_tools"`
 	// TokenBudget optional daily token cap; 0 = no limit. Core can count tokens per request and enforce or warn.
-	TokenBudget int64
+	TokenBudget int64 `json:"token_budget"`
 	// AgentName is the name of the bot (loaded from config file during onboarding).
-	AgentName string
+	AgentName string `json:"agent_name"`
 	// AdminUserID is the ID of the trusted admin user (e.g. Nextcloud uid or "admin").
-	AdminUserID string
+	AdminUserID string `json:"admin_user_id"`
 	// ToolOutputMaxRunes caps tool output length (0 = no truncation). Set via HATTIEBOT_TOOL_OUTPUT_MAX_RUNES.
-	ToolOutputMaxRunes int
+	ToolOutputMaxRunes int `json:"tool_output_max_runes"`
 
 	// Embedding service (vector memory). When set, memorize/recall use this instead of LLM Embed.
-	EmbeddingServiceURL   string // e.g. http://embeddinggood:8000 or https://embedding.bfs5.com
-	EmbeddingServiceAPIKey string
-	EmbeddingDimension   int    // 128, 256, 512, or 768; default 768
+	EmbeddingServiceURL   string `json:"embedding_service_url"`
+	EmbeddingServiceAPIKey string `json:"embedding_service_api_key"`
+	EmbeddingDimension   int    `json:"embedding_dimension"`
 
 	// Nextcloud (HattieBridge webhook; optional Files/Passwords)
-	NextcloudURL              string
-	HattieBridgeWebhookSecret string
-	NextcloudBotUser          string
-	NextcloudBotAppPassword   string
+	NextcloudURL              string `json:"nextcloud_url"`
+	HattieBridgeWebhookSecret string `json:"hattie_bridge_webhook_secret"`
+	NextcloudBotUser          string `json:"nextcloud_bot_user"`
+	NextcloudBotAppPassword   string `json:"nextcloud_bot_app_password"`
 	// DefaultChannel is used for proactive routing when no user preference (e.g. "admin_term", "nextcloud_talk").
-	DefaultChannel string
+	DefaultChannel string `json:"default_channel"`
 }
 
 // DefaultConfigDir returns the default config directory (project-local .hattiebot if present, else ~/.config/hattiebot).
@@ -90,9 +93,10 @@ func New(configDir string) *Config {
 		}
 	}
 	defaultCh := os.Getenv("HATTIEBOT_DEFAULT_CHANNEL")
-	return &Config{
+	cfg := &Config{
 		OpenRouterAPIKey:        os.Getenv("OPENROUTER_API_KEY"),
 		Model:                  os.Getenv("HATTIEBOT_MODEL"), // can be overridden by config file
+		EnvModel:               os.Getenv("HATTIEBOT_MODEL"),
 		ConfigDir:              configDir,
 		DBPath:                 dbPath,
 		WorkspaceDir:           cwd,
@@ -111,4 +115,18 @@ func New(configDir string) *Config {
 		DefaultChannel:         defaultCh,
 		AdminUserID:            os.Getenv("NEXTCLOUD_ADMIN_USER"),
 	}
+
+	// Priority: Env < Config File.
+	// We load config file (if exists) and OVERWRITE env vars.
+	configPath := filepath.Join(configDir, "config.json")
+	if data, err := os.ReadFile(configPath); err == nil {
+		// Use a temporary map to check presence, or unmarshal into struct directly.
+		// Unmarshal into struct works well: keys present in JSON will overwrite fields in struct.
+		// Keys missing in JSON will simply leave struct fields untouched (keeping CLI/Env value).
+		// Note: This relies on JSON having non-zero values. If JSON has "model": "", it wipes Env model.
+		// Usually acceptable for config file.
+		_ = json.Unmarshal(data, cfg)
+	}
+
+	return cfg
 }

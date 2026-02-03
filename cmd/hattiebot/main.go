@@ -297,6 +297,31 @@ func run(cfg *config.Config) error {
 		client = wiring.LoadClient(sysCfg.LLMClient, cfg.OpenRouterAPIKey, cfg.Model)
 	}
 
+	// Validate Model Configuration (prevent bricking if config.json has bad model)
+	healthCtx, hCancel := context.WithTimeout(ctx, 15*time.Second)
+	// We perform a minimal generation to verify model access.
+	// Note: We use a lightweight prompt to minimize cost.
+	_, err = client.ChatCompletion(healthCtx, []core.Message{{Role: "user", Content: "ping - respond with one word"}})
+	hCancel()
+	if err != nil {
+		fmt.Printf("[Init] Warning: Model '%s' failed validation: %v. Falling back to env model.\n", cfg.Model, err)
+		if cfg.EnvModel != "" && cfg.Model != cfg.EnvModel {
+			fmt.Printf("[Init] Activating fallback model: %s\n", cfg.EnvModel)
+			cfg.Model = cfg.EnvModel
+			// Re-initialize client with fallback model
+			if routingCfg != nil && routingCfg.HasDefaultRoute() {
+				bootstrap := openrouter.NewClient(cfg.OpenRouterAPIKey, cfg.Model, cfg.ConfigDir)
+				client = llmrouter.NewRouterClient(routingCfg, bootstrap, cfg.ConfigDir, nil)
+			} else {
+				client = wiring.LoadClient(sysCfg.LLMClient, cfg.OpenRouterAPIKey, cfg.Model)
+			}
+		} else {
+			fmt.Println("[Init] No fallback model available or fallback matches current. Continuing with risk of failure.")
+		}
+	} else {
+		fmt.Printf("[Init] Model '%s' verified successfully.\n", cfg.Model)
+	}
+
 	// Build embedder: embedding_routing.json default provider > single EmbeddingGood URL > LLM client Embed
 	llmFallback := embeddinggood.NewLLMEmbedWrapper(client)
 	var embedder core.EmbeddingClient

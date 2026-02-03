@@ -85,6 +85,17 @@ func BuildSystemPrompt(ctx context.Context, db *store.DB, cfg *config.Config, us
 		}
 		jobCtx += "[ACTION]: Consider repairing or deprecating. Use spawn_submind with mode tool_creation and the tool name and last_error.\n===============================\n"
 	}
+	
+	// Inject Registered Tools (so LLM knows how to use them via execute_registered_tool)
+	// We allow injection of all tools since the total count is usually small. If it grows large, we might summarize.
+	regTools, _ := db.AllTools(ctx)
+	if len(regTools) > 0 {
+		jobCtx += "\n\n== REGISTERED TOOLS ==\nTo use these, call 'execute_registered_tool' with {\"name\": \"<name>\", \"args\": { ... }}\n"
+		for _, t := range regTools {
+			jobCtx += fmt.Sprintf("- %s: %s\n  Schema: %s\n", t.Name, t.Description, t.InputSchema)
+		}
+		jobCtx += "===============================\n"
+	}
 
 	// Inject Context Documents (Active: full content; Inactive: summary list)
 	allDocs, _ := db.ListContextDocs(ctx)
