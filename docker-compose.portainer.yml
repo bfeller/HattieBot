@@ -71,7 +71,6 @@ services:
 
   hattiebot:
     build: .
-    image: hattiebot:latest
     container_name: hattiebot
     restart: unless-stopped
     depends_on:
