@@ -1,0 +1,10 @@
+{
+	"name": "hattiebot/hattiebridge",
+	"description": "Forwards Talk chat messages to HattieBot webhook",
+	"license": "AGPL-3.0-or-later",
+	"autoload": {
+		"psr-4": {
+			"OCA\\HattieBridge\\": "lib/"
+		}
+	}
+}

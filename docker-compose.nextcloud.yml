@@ -48,10 +48,11 @@ services:
     command: ["apache2-foreground"]
     volumes:
       - nextcloud_data:/var/www/html
-      - ./apps/hattiebridge:/tmp/hattiebridge-src:ro
-      - ./scripts/nextcloud-entrypoint.sh:/docker-entrypoint-hattiebridge.sh:ro
-      - ./scripts/nextcloud-post-install.sh:/docker-entrypoint-hooks.d/post-installation/99-hattiebridge.sh:ro
-      - ./scripts/nextcloud-before-starting.sh:/docker-entrypoint-hooks.d/before-starting/99-hattiebridge-config.sh:ro
+      # Path pivot: using docker/ directory to avoid ghost directories from prior deploys.
+      - ./docker/nextcloud/hattiebridge:/tmp/hattiebridge-src:ro
+      - ./docker/nextcloud/entrypoint.sh:/docker-entrypoint-hattiebridge.sh:ro
+      - ./docker/nextcloud/hooks/post-install.sh:/docker-entrypoint-hooks.d/post-installation/99-hattiebridge.sh:ro
+      - ./docker/nextcloud/hooks/before-starting.sh:/docker-entrypoint-hooks.d/before-starting/99-hattiebridge-config.sh:ro
     ports:
       - "80:80"
 

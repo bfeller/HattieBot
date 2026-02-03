@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+    <id>hattiebridge</id>
+    <name>HattieBridge</name>
+    <summary>Forwards Talk chat messages to HattieBot when Hattie user is in the room</summary>
+    <description>Listens to ChatMessageSentEvent and forwards messages to HattieBot webhook for rooms where the Hattie user is a participant. Enables single-identity chat (Hattie as user, not bot).</description>
+    <version>1.0.0</version>
+    <licence>agpl</licence>
+    <author>HattieBot</author>
+    <category>integration</category>
+    <dependencies>
+        <nextcloud min-version="27" max-version="33"/>
+        <php min-version="8.1"/>
+        <spreed min-version="17"/>
+    </dependencies>
+    <navigations/>
+</info>
