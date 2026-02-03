@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hattiebot/hattiebot/internal/config"
@@ -17,6 +18,7 @@ import (
 	"github.com/hattiebot/hattiebot/internal/registry"
 	"github.com/hattiebot/hattiebot/internal/store"
 	"github.com/hattiebot/hattiebot/internal/tools/builtin"
+	"github.com/hattiebot/hattiebot/internal/tools/nextcloud"
 )
 
 func init() {
@@ -25,6 +27,7 @@ func init() {
 			WorkspaceDir: cfg.WorkspaceDir,
 			DocsDir:      cfg.DocsDir,
 			ConfigDir:    cfg.ConfigDir,
+			Config:       cfg,
 			DB:           db,
 			Client:       client,
 		}, nil
@@ -294,16 +297,20 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 			Type: "function",
 			Function: openrouter.FunctionSpec{
 				Name:        "manage_schedule",
-				Description: "Create, list, or delete scheduled reminders and recurring tasks. Examples: 'remind me tomorrow to take pills', 'check email every day'.",
+				Description: "Create, list, or delete scheduled reminders and recurring tasks. remind=message user; execute_tool=run tool directly; agent_prompt=agent reasons and acts (use autonomous=true for background tasks like 'check email and file receipts').",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"action":         map[string]interface{}{"type": "string", "enum": []string{"create", "list", "delete", "pause"}, "description": "Action to perform"},
 						"description":    map[string]string{"type": "string", "description": "What to remind or do"},
-						"action_type":    map[string]interface{}{"type": "string", "enum": []string{"remind", "execute_tool"}, "description": "Type: remind (message) or execute_tool"},
+						"action_type":    map[string]interface{}{"type": "string", "enum": []string{"remind", "execute_tool", "agent_prompt"}, "description": "remind=message user; execute_tool=run tool; agent_prompt=agent reasons/acts"},
 						"schedule_type":  map[string]interface{}{"type": "string", "enum": []string{"once", "daily", "weekly", "hourly"}, "description": "Frequency"},
 						"run_at":         map[string]string{"type": "string", "description": "ISO datetime for 'once', or time like '09:00' for recurring"},
 						"id":             map[string]interface{}{"type": "integer", "description": "Plan ID (for delete/pause)"},
+						"prompt":         map[string]string{"type": "string", "description": "For agent_prompt: task prompt (e.g. 'Run self-reflection')"},
+						"autonomous":     map[string]string{"type": "boolean", "description": "For agent_prompt: true=run silently, notify only via notify_user"},
+						"tool":           map[string]string{"type": "string", "description": "For execute_tool: tool name (e.g. self_reflect)"},
+						"tool_args":      map[string]interface{}{"type": "object", "description": "For execute_tool: JSON args for the tool"},
 					},
 					"required": []string{"action"},
 				},
@@ -365,6 +372,82 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 		{
 			Type: "function",
 			Function: openrouter.FunctionSpec{
+				Name:        "log_self_modification",
+				Description: "Record a self-modification entry when you change core code (internal/*, cmd/*, Dockerfile) or workspace config. This log survives rebuilds—if a software update wipes your changes, you or the user can reference it to re-apply them. Do NOT log changes to $CONFIG_DIR/tools (registered tools).",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"file_paths":  map[string]interface{}{"type": "array", "items": map[string]string{"type": "string"}, "description": "Paths you modified (e.g. internal/scheduler/runner.go)"},
+						"change_type": map[string]interface{}{"type": "string", "enum": []string{"core_code", "config", "registered_tool"}, "description": "Type of change"},
+						"description": map[string]string{"type": "string", "description": "Brief summary of what changed and why"},
+						"context":     map[string]string{"type": "string", "description": "Optional: user request or trigger"},
+					},
+					"required": []string{"file_paths", "change_type", "description"},
+				},
+			},
+			Policy: "restricted",
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
+				Name:        "read_self_modification_log",
+				Description: "Read the self-modification changelog. Use when the user asks what changes you've made, or when you need to reference past optimizations that may have been lost in a rebuild.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"limit": map[string]interface{}{"type": "integer", "description": "Max entries to return (default 20)"},
+					},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
+				Name:        "list_webhook_routes",
+				Description: "List configured webhook routes from $CONFIG_DIR/webhook_routes.json. Use to see what external webhook endpoints are registered.",
+				Parameters: map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
+				Name:        "add_webhook_route",
+				Description: "Add a webhook route for external services (GitHub, Stripe, etc.). Path must start with /webhook/ and not be /webhook/talk. Secret is read from env var (secret_env). Auth type: header (exact match) or hmac_sha256 (GitHub-style).",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"path":          map[string]string{"type": "string", "description": "URL path (e.g. /webhook/github)"},
+						"id":            map[string]string{"type": "string", "description": "Short identifier (e.g. github)"},
+						"secret_header": map[string]string{"type": "string", "description": "Header name for secret/signature"},
+						"secret_env":    map[string]string{"type": "string", "description": "Env var name for secret value"},
+						"auth_type":     map[string]interface{}{"type": "string", "enum": []string{"header", "hmac_sha256"}, "description": "Auth type"},
+					},
+					"required": []string{"path", "id", "secret_header", "secret_env", "auth_type"},
+				},
+			},
+			Policy: "restricted",
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
+				Name:        "remove_webhook_route",
+				Description: "Remove a webhook route by path or id.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"path_or_id": map[string]string{"type": "string", "description": "Path (e.g. /webhook/github) or id (e.g. github)"},
+					},
+					"required": []string{"path_or_id"},
+				},
+			},
+			Policy: "restricted",
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
 				Name:        "self_reflect",
 				Description: "Trigger a self-reflection analysis to review system health and identify any issues. Only suggests improvements if there are clear problems.",
 				Parameters: map[string]interface{}{
@@ -372,6 +455,21 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 					"properties": map[string]interface{}{},
 				},
 			},
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
+				Name:        "notify_user",
+				Description: "Send a message to the user. Use when running autonomously to notify about errors, anomalies, or important findings. If the task completes successfully with nothing notable, do NOT call this.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"message": map[string]string{"type": "string", "description": "Message to send to the user"},
+					},
+					"required": []string{"message"},
+				},
+			},
+			Policy: "restricted",
 		},
 		{
 			Type: "function",
@@ -446,6 +544,105 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 			},
 			Policy: "admin_only",
 		},
+		// Nextcloud Tools
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
+				Name:        "request_nextcloud_ocs",
+				Description: "Execute a Nextcloud OCS API request (Provisioning API, etc.) as the bot/admin. Use for managing users, groups, apps that have OCS endpoints.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"method":   map[string]interface{}{"type": "string", "enum": []string{"GET", "POST", "PUT", "DELETE"}, "description": "HTTP Method"},
+						"endpoint": map[string]string{"type": "string", "description": "API endpoint (e.g. /cloud/users). /ocs/v1.php is prepended automatically."},
+						"params":   map[string]interface{}{"type": "object", "description": "Query params (GET) or Form fields (POST/PUT). Map strings to strings."},
+					},
+					"required": []string{"method", "endpoint"},
+				},
+			},
+			Policy: "restricted", // Admin/Bot power
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
+				Name:        "list_nextcloud_files",
+				Description: "List files in Nextcloud via WebDAV.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"path": map[string]string{"type": "string", "description": "Path to list (e.g. / or /Documents)"},
+					},
+					"required": []string{"path"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
+				Name:        "read_nextcloud_file",
+				Description: "Read file content from Nextcloud via WebDAV.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"path": map[string]string{"type": "string", "description": "Path to file"},
+					},
+					"required": []string{"path"},
+				},
+			},
+		},
+
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
+				Name:        "manage_context_doc",
+				Description: "Create, update, delete, list, or toggle active context documents. Content from active documents is injected into the system prompt.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"action":      map[string]interface{}{"type": "string", "enum": []string{"create", "update", "delete", "list", "read", "toggle"}, "description": "Action to perform"},
+						"title":       map[string]string{"type": "string", "description": "Document title (unique)"},
+						"content":     map[string]string{"type": "string", "description": "Document content (Markdown preferred)"},
+						"description": map[string]string{"type": "string", "description": "Brief description of the document"},
+						"active":      map[string]interface{}{"type": "boolean", "description": "For toggle: true to activate, false to deactivate"},
+					},
+					"required": []string{"action"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
+				Name:        "get_secret",
+				Description: "Retrieve a password/secret from Nextcloud Passwords app.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query": map[string]string{"type": "string", "description": "Title to search for"},
+					},
+					"required": []string{"query"},
+				},
+			},
+			Policy: "restricted",
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
+				Name:        "store_secret",
+				Description: "Store a new secret in Nextcloud Passwords app and share it with Admin.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"title":    map[string]string{"type": "string", "description": "Title/Label for the secret"},
+						"password": map[string]string{"type": "string", "description": "The secret/password"},
+						"login":    map[string]string{"type": "string", "description": "Username (optional)"},
+						"url":      map[string]string{"type": "string", "description": "URL (optional)"},
+						"notes":    map[string]string{"type": "string", "description": "Notes (optional)"},
+					},
+					"required": []string{"title", "password"},
+				},
+			},
+			Policy: "restricted",
+		},
 	}
 	return append(defs, legacyDefs...)
 }
@@ -464,10 +661,12 @@ type Executor struct {
 	WorkspaceDir    string
 	DocsDir         string
 	ConfigDir       string
+	Config          *config.Config
 	DB              *store.DB
 	Client          core.LLMClient
 	Embedder        core.EmbeddingClient // When set, memorize/recall use this; else fall back to Client.Embed
 	Gateway         *gateway.Gateway
+	Router          *gateway.Router // For notify_user (proactive delivery)
 	LogStore        *store.LogStore
 	HealthReg       *health.Registry
 	TokenBudget     int
@@ -489,6 +688,16 @@ func (e *Executor) embed(ctx context.Context, text string, embedType string) ([]
 
 // Execute runs the tool by name with the given JSON arguments; returns JSON result.
 func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, error) {
+	// Safety timeout: prevent tools from hanging the agent loop indefinitely.
+	// Default to 2 minutes, but allow known long-running tools (builds, CLI agents) more time.
+	timeout := 2 * time.Minute
+	if name == "run_terminal_cmd" || name == "autohand_cli" || name == "spawn_submind" {
+		timeout = 15 * time.Minute
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// 1. Check updated builtin registry
 	if tool, ok := builtin.Registry[name]; ok {
 		return tool.Execute(ctx, argsJSON)
@@ -505,8 +714,11 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 		return ListDirTool(ctx, e.WorkspaceDir, argsJSON)
 	case "read_architecture":
 		return ReadArchitectureTool(ctx, e.DocsDir, argsJSON)
+
 	case "autohand_cli":
 		return AutohandCLITool(ctx, argsJSON)
+	case "manage_context_doc":
+		return ManageContextDocTool(ctx, e.DB, argsJSON)
 
 	case "manage_user_preference":
 		userID, err := getUserID(ctx)
@@ -644,12 +856,16 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 			return ErrJSON(err), nil
 		}
 		var args struct {
-			Action       string `json:"action"`       // create, list, delete, pause
-			Description  string `json:"description"`  // what to remind
-			ActionType   string `json:"action_type"`  // remind, execute_tool
-			ScheduleType string `json:"schedule_type"` // once, daily, weekly, hourly
-			RunAt        string `json:"run_at"`       // ISO datetime or time
-			ID           int64  `json:"id"`
+			Action       string                 `json:"action"`
+			Description  string                 `json:"description"`
+			ActionType   string                 `json:"action_type"`
+			ScheduleType string                 `json:"schedule_type"`
+			RunAt        string                 `json:"run_at"`
+			ID           int64                  `json:"id"`
+			Prompt       string                 `json:"prompt"`
+			Autonomous   bool                   `json:"autonomous"`
+			Tool         string                 `json:"tool"`
+			ToolArgs     map[string]interface{} `json:"tool_args"`
 		}
 		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 			return ErrJSON(err), nil
@@ -688,7 +904,30 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 			if actionType == "" {
 				actionType = "remind"
 			}
-			id, err := e.DB.CreatePlan(ctx, userID, args.Description, actionType, "", args.ScheduleType, args.RunAt, nextRun)
+			var actionPayload string
+			switch actionType {
+			case "execute_tool":
+				if args.Tool == "" {
+					return ErrJSON(fmt.Errorf("execute_tool requires tool name")), nil
+				}
+				toolArgs := args.ToolArgs
+				if toolArgs == nil {
+					toolArgs = map[string]interface{}{}
+				}
+				payload := map[string]interface{}{"tool": args.Tool, "args": toolArgs}
+				if b, err := json.Marshal(payload); err == nil {
+					actionPayload = string(b)
+				}
+			case "agent_prompt":
+				payload := map[string]interface{}{"prompt": args.Prompt, "autonomous": args.Autonomous}
+				if args.Prompt == "" {
+					payload["prompt"] = args.Description
+				}
+				if b, err := json.Marshal(payload); err == nil {
+					actionPayload = string(b)
+				}
+			}
+			id, err := e.DB.CreatePlan(ctx, userID, args.Description, actionType, actionPayload, args.ScheduleType, args.RunAt, nextRun)
 			if err != nil {
 				return ErrJSON(err), nil
 			}
@@ -830,6 +1069,137 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 			return `{"error": "log store not configured"}`, nil
 		}
 		return ReadLogsTool(ctx, e.LogStore, argsJSON)
+	case "log_self_modification":
+		var args struct {
+			FilePaths   []string `json:"file_paths"`
+			ChangeType  string   `json:"change_type"`
+			Description string   `json:"description"`
+			Context     string   `json:"context"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return ErrJSON(err), nil
+		}
+		if len(args.FilePaths) == 0 {
+			return ErrJSON(fmt.Errorf("file_paths cannot be empty")), nil
+		}
+		if args.ChangeType != "core_code" && args.ChangeType != "config" && args.ChangeType != "registered_tool" {
+			return ErrJSON(fmt.Errorf("change_type must be core_code, config, or registered_tool")), nil
+		}
+		if err := e.DB.InsertSelfModification(ctx, args.FilePaths, args.ChangeType, args.Description, args.Context); err != nil {
+			return ErrJSON(err), nil
+		}
+		return `{"status": "logged"}`, nil
+	case "read_self_modification_log":
+		var args struct {
+			Limit int `json:"limit"`
+		}
+		if argsJSON != "" {
+			_ = json.Unmarshal([]byte(argsJSON), &args)
+		}
+		entries, err := e.DB.ListSelfModifications(ctx, args.Limit)
+		if err != nil {
+			return ErrJSON(err), nil
+		}
+		if len(entries) == 0 {
+			return `{"entries": [], "message": "No self-modifications recorded yet."}`, nil
+		}
+		type entry struct {
+			ID          int64    `json:"id"`
+			CreatedAt   string   `json:"created_at"`
+			FilePaths   []string `json:"file_paths"`
+			ChangeType  string   `json:"change_type"`
+			Description string   `json:"description"`
+			Context     string   `json:"context,omitempty"`
+		}
+		var out []entry
+		for _, sm := range entries {
+			out = append(out, entry{ID: sm.ID, CreatedAt: sm.CreatedAt, FilePaths: sm.FilePaths, ChangeType: sm.ChangeType, Description: sm.Description, Context: sm.Context})
+		}
+		b, _ := json.MarshalIndent(map[string]interface{}{"entries": out}, "", "  ")
+		return string(b), nil
+	case "list_webhook_routes":
+		if e.ConfigDir == "" {
+			return `{"error": "config dir not configured"}`, nil
+		}
+		routes, err := store.LoadWebhookRoutes(e.ConfigDir)
+		if err != nil {
+			return ErrJSON(err), nil
+		}
+		if routes == nil {
+			routes = []store.WebhookRoute{}
+		}
+		b, _ := json.MarshalIndent(map[string]interface{}{"routes": routes}, "", "  ")
+		return string(b), nil
+	case "add_webhook_route":
+		if e.ConfigDir == "" {
+			return ErrJSON(fmt.Errorf("config dir not configured")), nil
+		}
+		var args struct {
+			Path         string `json:"path"`
+			ID           string `json:"id"`
+			SecretHeader string `json:"secret_header"`
+			SecretEnv    string `json:"secret_env"`
+			AuthType     string `json:"auth_type"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return ErrJSON(err), nil
+		}
+		if !strings.HasPrefix(args.Path, "/webhook/") || args.Path == "/webhook/talk" {
+			return ErrJSON(fmt.Errorf("path must start with /webhook/ and cannot be /webhook/talk")), nil
+		}
+		if args.AuthType != "header" && args.AuthType != "hmac_sha256" {
+			return ErrJSON(fmt.Errorf("auth_type must be header or hmac_sha256")), nil
+		}
+		routes, _ := store.LoadWebhookRoutes(e.ConfigDir)
+		if routes == nil {
+			routes = []store.WebhookRoute{}
+		}
+		for _, r := range routes {
+			if r.Path == args.Path || r.ID == args.ID {
+				return ErrJSON(fmt.Errorf("route with path %s or id %s already exists", args.Path, args.ID)), nil
+			}
+		}
+		routes = append(routes, store.WebhookRoute{
+			Path:         args.Path,
+			ID:           args.ID,
+			SecretHeader: args.SecretHeader,
+			SecretEnv:    args.SecretEnv,
+			AuthType:     args.AuthType,
+		})
+		if err := store.SaveWebhookRoutes(e.ConfigDir, routes); err != nil {
+			return ErrJSON(err), nil
+		}
+		return `{"status": "added", "path": "` + args.Path + `"}`, nil
+	case "remove_webhook_route":
+		if e.ConfigDir == "" {
+			return ErrJSON(fmt.Errorf("config dir not configured")), nil
+		}
+		var args struct {
+			PathOrID string `json:"path_or_id"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return ErrJSON(err), nil
+		}
+		routes, err := store.LoadWebhookRoutes(e.ConfigDir)
+		if err != nil {
+			return ErrJSON(err), nil
+		}
+		if routes == nil {
+			return ErrJSON(fmt.Errorf("no routes to remove")), nil
+		}
+		var filtered []store.WebhookRoute
+		for _, r := range routes {
+			if r.Path != args.PathOrID && r.ID != args.PathOrID {
+				filtered = append(filtered, r)
+			}
+		}
+		if len(filtered) == len(routes) {
+			return ErrJSON(fmt.Errorf("no route found for %s", args.PathOrID)), nil
+		}
+		if err := store.SaveWebhookRoutes(e.ConfigDir, filtered); err != nil {
+			return ErrJSON(err), nil
+		}
+		return `{"status": "removed", "path_or_id": "` + args.PathOrID + `"}`, nil
 	case "self_reflect":
 		if e.Spawner == nil {
 			return `{"error": "sub-mind spawner not configured"}`, nil
@@ -857,6 +1227,24 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 		}
 		out, _ := json.MarshalIndent(result, "", "  ")
 		return string(out), nil
+	case "notify_user":
+		userID, err := getUserID(ctx)
+		if err != nil {
+			return ErrJSON(err), nil
+		}
+		var args struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil || args.Message == "" {
+			return ErrJSON(fmt.Errorf("message required")), nil
+		}
+		if e.Router == nil {
+			return ErrJSON(fmt.Errorf("router not configured")), nil
+		}
+		if err := e.Router.RouteMessage(ctx, userID, args.Message, ""); err != nil {
+			return ErrJSON(err), nil
+		}
+		return `{"status": "sent"}`, nil
 	case "spawn_submind":
 		if e.Spawner == nil {
 			return `{"error": "sub-mind spawner not configured"}`, nil
@@ -942,6 +1330,70 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 		return ManageLLMProviderTool(ctx, e.ConfigDir, argsJSON)
 	case "manage_embedding_provider":
 		return ManageEmbeddingProviderTool(ctx, e.ConfigDir, argsJSON)
+	
+	// Nextcloud Tools
+	case "request_nextcloud_ocs":
+		if e.Config == nil {
+			return ErrJSON(fmt.Errorf("config not available")), nil
+		}
+		var args struct {
+			Method   string            `json:"method"`
+			Endpoint string            `json:"endpoint"`
+			Params   map[string]string `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return ErrJSON(err), nil
+		}
+		return nextcloud.RequestNextcloudOCS(e.Config, args.Method, args.Endpoint, args.Params)
+	case "list_nextcloud_files":
+		if e.Config == nil {
+			return ErrJSON(fmt.Errorf("config not available")), nil
+		}
+		var args struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return ErrJSON(err), nil
+		}
+		return nextcloud.ListNextcloudFiles(e.Config, args.Path)
+	case "read_nextcloud_file":
+		if e.Config == nil {
+			return ErrJSON(fmt.Errorf("config not available")), nil
+		}
+		var args struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return ErrJSON(err), nil
+		}
+		return nextcloud.ReadNextcloudFile(e.Config, args.Path)
+	case "get_secret":
+		if e.Config == nil {
+			return ErrJSON(fmt.Errorf("config not available")), nil
+		}
+		var args struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return ErrJSON(err), nil
+		}
+		return nextcloud.GetNextcloudSecret(e.Config, args.Query)
+	case "store_secret":
+		if e.Config == nil {
+			return ErrJSON(fmt.Errorf("config not available")), nil
+		}
+		var args struct {
+			Title    string `json:"title"`
+			Password string `json:"password"`
+			Login    string `json:"login"`
+			URL      string `json:"url"`
+			Notes    string `json:"notes"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return ErrJSON(err), nil
+		}
+		return nextcloud.StoreSecret(e.Config, args.Title, args.Password, args.Login, args.URL, args.Notes)
+
 	default:
 		out, _ := json.Marshal(map[string]string{"error": "unknown tool: " + name})
 		return string(out), nil

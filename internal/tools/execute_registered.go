@@ -62,9 +62,9 @@ func ExecuteRegisteredToolByName(ctx context.Context, db store.ToolRegistry, wor
 // ValidateToolOutput returns true if exitCode is 0 and stdout is valid JSON (tool contract).
 // Used for health recording: invalid or non-zero triggers RecordToolFailure.
 func ValidateToolOutput(stdout string, exitCode int) bool {
-	if exitCode != 0 {
-		return false
-	}
+	// We accept non-zero exit codes if the output is valid JSON (e.g. {"error": "..."})
+	// This ensures tools that correctly report errors via JSON are not marked as broken.
+
 	trimmed := bytes.TrimSpace([]byte(stdout))
 	if len(trimmed) == 0 {
 		return false

@@ -1,9 +1,9 @@
 # Nextcloud + HattieBot: single compose (PostgreSQL, Nextcloud, HattieBot).
 # Usage: copy .env.example to .env, set required vars, then:
 #   docker compose -f docker-compose.nextcloud.yml up -d
-# Nextcloud 32 (Talk webhook bots supported). PostgreSQL 17.
-# HattieBot waits for Nextcloud to be ready, then writes config and starts; Nextcloud
-# registers the Talk bot via post-installation hook (occ talk:bot:install).
+# Nextcloud 32. PostgreSQL 17.
+# HattieBot waits for Nextcloud to be ready, then writes config and starts.
+# HattieBridge (Nextcloud app) forwards Talk chat messages to HattieBot when Hattie user is in the room.
 
 services:
   db:
@@ -18,7 +18,7 @@ services:
     volumes:
       - nextcloud_db:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nextcloud} -d ${POSTGRES_DB:-nextcloud}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nextcloud} -d ${POSTGRES_DB:-nextcloud}" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -39,15 +39,54 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-nextcloud}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       NEXTCLOUD_TRUSTED_DOMAINS: ${NEXTCLOUD_TRUSTED_DOMAINS:-localhost nextcloud}
-      NEXTCLOUD_TALK_BOT_SECRET: ${NEXTCLOUD_TALK_BOT_SECRET:?set NEXTCLOUD_TALK_BOT_SECRET}
-      NEXTCLOUD_TALK_BOT_NAME: ${NEXTCLOUD_TALK_BOT_NAME:-HattieBot}
-      NEXTCLOUD_TALK_BOT_URL: ${NEXTCLOUD_TALK_BOT_URL:-http://hattiebot:8080/webhook/talk}
-      NEXTCLOUD_TALK_BOT_DESCRIPTION: ${NEXTCLOUD_TALK_BOT_DESCRIPTION:-HattieBot agent}
+      HATTIEBOT_WEBHOOK_SECRET: ${HATTIEBOT_WEBHOOK_SECRET:?set HATTIEBOT_WEBHOOK_SECRET}
+      HATTIEBOT_WEBHOOK_URL: ${HATTIEBOT_WEBHOOK_URL:-http://hattiebot:8080/webhook/talk}
+      HATTIEBOT_BOT_NAME: ${HATTIEBOT_BOT_NAME:-HattieBot}
+      OVERWRITEPROTOCOL: https
+      XDG_CACHE_HOME: /var/www/html/data/.cache
+    entrypoint: ["/bin/sh", "/docker-entrypoint-hattiebridge.sh"]
+    command: ["apache2-foreground"]
     volumes:
       - nextcloud_data:/var/www/html
-      - ./scripts/nextcloud-post-install.sh:/docker-entrypoint-hooks.d/post-installation/99-register-talk-bot.sh:ro
+      - ./apps/hattiebridge:/tmp/hattiebridge-src:ro
+      - ./scripts/nextcloud-entrypoint.sh:/docker-entrypoint-hattiebridge.sh:ro
+      - ./scripts/nextcloud-post-install.sh:/docker-entrypoint-hooks.d/post-installation/99-hattiebridge.sh:ro
+      - ./scripts/nextcloud-before-starting.sh:/docker-entrypoint-hooks.d/before-starting/99-hattiebridge-config.sh:ro
     ports:
       - "80:80"
+
+  nextcloud-cron:
+    image: nextcloud:32
+    container_name: nextcloud-cron
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      nextcloud:
+        condition: service_started
+    env_file: .env
+    environment:
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:?set NEXTCLOUD_ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:?set NEXTCLOUD_ADMIN_PASSWORD}
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${POSTGRES_DB:-nextcloud}
+      POSTGRES_USER: ${POSTGRES_USER:-nextcloud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - nextcloud_data:/var/www/html
+    entrypoint: /cron.sh
+
+  caddy:
+    image: caddy:alpine
+    restart: unless-stopped
+    depends_on:
+      - nextcloud
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "8443:443"
 
   hattiebot:
     build: .
@@ -59,6 +98,7 @@ services:
     env_file: .env
     environment:
       HATTIEBOT_CONFIG_DIR: /data
+      CONFIG_DIR: /data
       HATTIEBOT_COMPOSE_MODE: "1"
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY}
       HATTIEBOT_MODEL: ${HATTIEBOT_MODEL:?set HATTIEBOT_MODEL}
@@ -66,9 +106,12 @@ services:
       HATTIEBOT_AUDIENCE: ${HATTIEBOT_AUDIENCE:?set HATTIEBOT_AUDIENCE}
       HATTIEBOT_PURPOSE: ${HATTIEBOT_PURPOSE:?set HATTIEBOT_PURPOSE}
       NEXTCLOUD_URL: http://nextcloud
-      NEXTCLOUD_TALK_BOT_SECRET: ${NEXTCLOUD_TALK_BOT_SECRET:?set NEXTCLOUD_TALK_BOT_SECRET}
+      HATTIEBOT_WEBHOOK_SECRET: ${HATTIEBOT_WEBHOOK_SECRET:?set HATTIEBOT_WEBHOOK_SECRET}
       NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:?set NEXTCLOUD_ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:?set NEXTCLOUD_ADMIN_PASSWORD}
       HATTIEBOT_HTTP_PORT: "8080"
+      EMBEDDING_SERVICE_URL: ${EMBEDDING_SERVICE_URL:-}
+      EMBEDDING_SERVICE_API_KEY: ${EMBEDDING_SERVICE_API_KEY:-}
     volumes:
       - hattiebot_data:/data
       - .:/workspace
@@ -80,3 +123,5 @@ volumes:
   nextcloud_db:
   nextcloud_data:
   hattiebot_data:
+  caddy_data:
+  caddy_config:

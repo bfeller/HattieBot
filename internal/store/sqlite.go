@@ -17,7 +17,9 @@ type DB struct {
 // When embedding is enabled (e.g. via config), load sqlite-vec extension and create vec0
 // virtual table for message or tool-doc embeddings; the agent can then use RAG for context.
 func Open(ctx context.Context, path string) (*DB, error) {
-	db, err := sql.Open("sqlite", path)
+	// Enable WAL mode (concurrency) and busy_timeout (waiting for locks)
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout=5000&_pragma=journal_mode=WAL", path)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}

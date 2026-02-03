@@ -22,12 +22,13 @@ type ConfigFile struct {
 	EmbeddingServiceAPIKey string `json:"embedding_service_api_key,omitempty"`
 	EmbeddingDimension   int    `json:"embedding_dimension,omitempty"`
 
-	// Nextcloud (Talk webhook, optional Files/Passwords)
-	NextcloudURL           string `json:"nextcloud_url,omitempty"`
-	NextcloudTalkBotSecret string `json:"nextcloud_talk_bot_secret,omitempty"`
-	NextcloudBotUser       string `json:"nextcloud_bot_user,omitempty"`
-	NextcloudBotAppPassword string `json:"nextcloud_bot_app_password,omitempty"`
-	DefaultChannel          string `json:"default_channel,omitempty"`
+	// Nextcloud (HattieBridge webhook, optional Files/Passwords)
+	NextcloudURL               string `json:"nextcloud_url,omitempty"`
+	HattieBridgeWebhookSecret  string `json:"hattiebridge_webhook_secret,omitempty"`
+	NextcloudBotUser           string `json:"nextcloud_bot_user,omitempty"`
+	NextcloudBotAppPassword    string `json:"nextcloud_bot_app_password,omitempty"`
+	NextcloudIntroSent         bool   `json:"nextcloud_intro_sent,omitempty"`
+	DefaultChannel             string `json:"default_channel,omitempty"`
 }
 
 // LoadConfigFile reads config from dir/config.json. Missing file returns nil, nil.

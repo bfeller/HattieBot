@@ -83,7 +83,7 @@ Config is stored in `./.hattiebot/` or `~/.config/hattiebot/`.
 | `HATTIEBOT_DEFAULT_CHANNEL` | Default channel for proactive messages: `admin_term` or `nextcloud_talk` |
 | `HATTIEBOT_HTTP_PORT` | HTTP port for webhooks (default: `8080`) |
 | `NEXTCLOUD_URL` | Nextcloud base URL (e.g. `http://nextcloud` in compose) |
-| `NEXTCLOUD_TALK_BOT_SECRET` | Shared secret for Talk webhook bot (must match `occ talk:bot:install`) |
+| `HATTIEBOT_WEBHOOK_SECRET` | Shared secret for HattieBridge webhook (must match HattieBridge app config) |
 | `NEXTCLOUD_ADMIN_USER` | Nextcloud admin username; used as HattieBot admin (trusted source) in compose mode |
 | `HATTIEBOT_ADMIN_USER_ID` | Override admin user ID (default: `NEXTCLOUD_ADMIN_USER` in compose mode) |
 
@@ -254,26 +254,26 @@ To use an existing embedding service (e.g. `https://embedding.bfs5.com`), use [d
 
 ### Nextcloud + HattieBot (single compose)
 
-[docker-compose.nextcloud.yml](docker-compose.nextcloud.yml) runs **PostgreSQL**, **Nextcloud**, and **HattieBot** in one stack. Nextcloud auto-installs from env; the Nextcloud container registers the Talk webhook bot via `occ talk:bot:install`; HattieBot waits for Nextcloud to be ready, writes its config, then starts and accepts Talk webhooks.
+[docker-compose.nextcloud.yml](docker-compose.nextcloud.yml) runs **PostgreSQL**, **Nextcloud**, and **HattieBot** in one stack. Nextcloud auto-installs from env; the **HattieBridge** app (mounted from `apps/hattiebridge`) forwards Talk chat messages to HattieBot when the Hattie user is in the room. Hattie appears as a Nextcloud user (single identity), not a bot.
 
-**Requirements:** Nextcloud 32 (Talk webhook bots supported). PostgreSQL 17.
+**Requirements:** Nextcloud 32. PostgreSQL 17.
 
 1. Copy [.env.example](.env.example) to `.env` and set:
-   - `POSTGRES_PASSWORD`, `NEXTCLOUD_ADMIN_USER`, `NEXTCLOUD_ADMIN_PASSWORD`, `NEXTCLOUD_TALK_BOT_SECRET`
+   - `POSTGRES_PASSWORD`, `NEXTCLOUD_ADMIN_USER`, `NEXTCLOUD_ADMIN_PASSWORD`, `HATTIEBOT_WEBHOOK_SECRET`
    - `NEXTCLOUD_TRUSTED_DOMAINS=localhost nextcloud` (include `nextcloud` so HattieBot’s bootstrap health check gets 200)
    - `OPENROUTER_API_KEY`, `HATTIEBOT_MODEL`, `HATTIEBOT_AUDIENCE`, `HATTIEBOT_PURPOSE`
 2. Run:
    ```bash
    docker compose -f docker-compose.nextcloud.yml up -d
    ```
-3. Add the bot to a Talk room (Nextcloud Talk → room → Integrations → Add bot → HattieBot).
+3. On first boot, Hattie creates a 1:1 Talk conversation with the admin and sends an intro. Open Nextcloud Talk to see it and start chatting.
 4. **Trust:** The Nextcloud admin user (`NEXTCLOUD_ADMIN_USER`) is HattieBot’s trusted admin. New Nextcloud users who message the bot start as *restricted* until that admin approves them (e.g. via an approval tool or DB).
 
-**First-time flow:** Postgres and Nextcloud start; Nextcloud auto-installs; the Nextcloud entrypoint runs `occ talk:bot:install` when ready; HattieBot (compose mode) waits for Nextcloud, writes config (including AdminUserID from `NEXTCLOUD_ADMIN_USER`), then starts the gateway and HTTP server. Webhooks hit `http://hattiebot:8080/webhook/talk`. Use `.env` or Docker secrets for all secrets; do not commit them.
+**First-time flow:** Postgres and Nextcloud start; Nextcloud auto-installs; the post-install hook enables Talk and HattieBridge; HattieBot (compose mode) waits for Nextcloud, provisions the Hattie user, writes config, then starts. HattieBridge forwards messages to `http://hattiebot:8080/webhook/talk`. HattieBot sends replies via the chat API as the Hattie user. Use `.env` or Docker secrets for all secrets; do not commit them.
 
 **If Nextcloud doesn’t start:** Run `docker logs nextcloud` to see the entrypoint and post-install output (e.g. hook script errors). Port 80 must be free; use `ports: "8081:80"` in compose if 80 is in use.
 
-**401 when HattieBot sends a reply:** Ensure `NEXTCLOUD_TALK_BOT_SECRET` in `.env` matches the secret used when the bot was registered. After changing HattieBot code, rebuild the image so the running container gets the fix: `docker compose -f docker-compose.nextcloud.yml build hattiebot && docker compose -f docker-compose.nextcloud.yml up -d`.
+**403 on webhook or send failures:** Ensure `HATTIEBOT_WEBHOOK_SECRET` in `.env` matches the value passed to the Nextcloud container (HattieBridge uses it to authenticate to HattieBot). For send failures, ensure the Hattie user was auto-provisioned (check logs for "Auto-provisioned Nextcloud user"). Rebuild after code changes: `docker compose -f docker-compose.nextcloud.yml build hattiebot && docker compose -f docker-compose.nextcloud.yml up -d`.
 
 ---
 

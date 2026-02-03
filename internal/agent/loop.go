@@ -32,6 +32,27 @@ func isProviderValidationError(err error) bool {
 		strings.Contains(s, "invalid_request_error")
 }
 
+// isProviderOrAPIError returns true for transient provider/API errors that we should not expose raw to the user.
+func isProviderOrAPIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "provider returned error") ||
+		strings.Contains(s, "rate limit") ||
+		strings.Contains(s, "503") ||
+		strings.Contains(s, "502") ||
+		strings.Contains(s, "504") ||
+		strings.Contains(s, "timeout") ||
+		strings.Contains(s, "temporarily unavailable")
+}
+
+// userFriendlyProviderError returns a message suitable for the user when a provider/API error occurs.
+func userFriendlyProviderError(err error) string {
+	_ = err // Could tailor message by error type in future
+	return "I'm sorry, the AI provider temporarily returned an error. Please try again in a moment—your message was received and I'll process it when you resend."
+}
+
 // maxMessagesBeforeTruncationRetry is the message count above which we truncate and retry on provider validation error.
 const maxMessagesBeforeTruncationRetry = 28
 
@@ -97,6 +118,24 @@ func (l *Loop) RunOneTurn(ctx context.Context, msg gateway.Message) (assistantCo
 	if err != nil {
 		log.Printf("[AGENT] Failed to resolve user: %v", err)
 		return "", fmt.Errorf("resolving user: %w", err)
+	}
+
+	// 1.2. Store room token for nextcloud_talk (needed for proactive reminders)
+	if msg.Channel == "nextcloud_talk" && msg.ThreadID != "" {
+		roomToken := msg.ThreadID
+		if idx := strings.Index(roomToken, ":"); idx > 0 {
+			roomToken = roomToken[:idx]
+		}
+		if roomToken != "" {
+			meta := make(map[string]string)
+			if user.Metadata != "" {
+				_ = json.Unmarshal([]byte(user.Metadata), &meta)
+			}
+			meta["last_room_token"] = roomToken
+			if b, err := json.Marshal(meta); err == nil {
+				_ = l.DB.UpdateUserMetadata(ctx, user.ID, string(b))
+			}
+		}
 	}
 
 	// 1.5. Authorization & Trust Level Check
@@ -189,6 +228,10 @@ func (l *Loop) RunOneTurn(ctx context.Context, msg gateway.Message) (assistantCo
 		}
 	}
 
+	if msg.Autonomous {
+		userContext += "\n\n[AUTONOMOUS TASK]: You are running an autonomous scheduled task. Complete it without requiring user input. Only call notify_user if something needs the user's attention (errors, anomalies, important findings). If the task completes successfully with nothing notable, finish without calling notify_user."
+	}
+
 	systemPrompt += userContext
 
 	// Build OpenRouter messages: system + history + new user
@@ -212,6 +255,9 @@ func (l *Loop) RunOneTurn(ctx context.Context, msg gateway.Message) (assistantCo
     totalTurns := 0
     // One retry with truncated context on OpenRouter "Provider returned error" (e.g. reasoning_content/thinking).
     truncationRetryDone := false
+    // Track tool rounds for status-update hint (after 2+ rounds with no user feedback).
+    toolRounds := 0
+    statusUpdateHintSent := false
 
     var content string
     var toolCalls []openrouter.ToolCall
@@ -228,6 +274,14 @@ TurnLoop:
         // Inner Tool Loop
         for {
             if useTools {
+                // After 2+ tool rounds with no user feedback, prompt the model to include a status update.
+                if toolRounds >= 2 && !statusUpdateHintSent && l.Gateway != nil {
+                    statusUpdateHintSent = true
+                    messages = append(messages, openrouter.Message{
+                        Role:    "system",
+                        Content: "The user has received no feedback yet. Include a brief status update (1-2 sentences) in your next response along with any tool calls, so the user knows you're working.",
+                    })
+                }
                 var err error
                 content, toolCalls, err = l.Client.ChatCompletionWithTools(ctx, messages, toolDefs)
                 log.Printf("[AGENT] ChatCompletionWithTools returned: content_len=%d, toolCalls=%d, err=%v", len(content), len(toolCalls), err)
@@ -259,8 +313,11 @@ TurnLoop:
                             continue
                         }
                     }
-                    // Transient or other error
-                    log.Printf("[AGENT] API error (not tool-related), returning: %v", err)
+                    // Transient or other error—return user-friendly message for provider/API errors
+                    log.Printf("[AGENT] API error (not tool-related): %v", err)
+                    if isProviderOrAPIError(err) {
+                        return userFriendlyProviderError(err), nil
+                    }
                     return "", err
                 }
                 
@@ -277,12 +334,26 @@ TurnLoop:
                     }
                 }
 
+                // Send intermediate status update when model returns both content and tool calls
+                if strings.TrimSpace(content) != "" && len(toolCalls) > 0 && l.Gateway != nil {
+                    statusContent := StripInlineToolCallMarkers(content)
+                    if strings.TrimSpace(statusContent) != "" {
+                        l.Gateway.RouteReply(msg, statusContent)
+                        log.Printf("[AGENT] Sent intermediate status update to user: %q", statusContent)
+                    }
+                }
+
                 if len(toolCalls) == 0 {
                     log.Printf("[AGENT] No tool calls, breaking inner loop")
                     break
                 }
-                log.Printf("[AGENT] Executing %d tool calls", len(toolCalls))
-                
+                var toolNames []string
+                for _, tc := range toolCalls {
+                    toolNames = append(toolNames, tc.Function.Name)
+                }
+                log.Printf("[AGENT] Executing %d tool calls: %s", len(toolCalls), strings.Join(toolNames, ", "))
+                toolRounds++
+
                 // Append assistant message with tool_calls
                 assistantMsg := openrouter.Message{
                     Role:      "assistant",
@@ -313,6 +384,22 @@ TurnLoop:
                     // Save to DB
                     l.DB.InsertMessage(ctx, "tool", result, "", "system", msg.Channel, msg.ThreadID, "", "", tc.ID)
                 }
+                // Inject any new user messages that arrived while we were working (e.g. "stop").
+                // The model will see them on the next LLM call and can respond accordingly.
+                if l.Gateway != nil {
+                    tk := gateway.ThreadKey(msg)
+                    pending := l.Gateway.GetPendingAndClear(tk)
+                    if len(pending) > 0 {
+                        messages = append(messages, openrouter.Message{
+                            Role:    "system",
+                            Content: "The user sent a new message while you were working. Read it and respond—if they ask you to stop or change direction, acknowledge and do so.",
+                        })
+                        for _, p := range pending {
+                            messages = append(messages, openrouter.Message{Role: "user", Content: p.Content})
+                            _, _ = l.DB.InsertMessage(ctx, "user", p.Content, "", p.SenderID, msg.Channel, msg.ThreadID, "", "", "")
+                        }
+                    }
+                }
                 // Reset empty-response counter after successful tool execution so we don't give up mid-request.
                 emptyRetries = 0
                 continue
@@ -328,6 +415,10 @@ TurnLoop:
             var err error
             content, err = l.Client.ChatCompletion(ctx, simpleMessages)
             if err != nil {
+                log.Printf("[AGENT] ChatCompletion error: %v", err)
+                if isProviderOrAPIError(err) {
+                    return userFriendlyProviderError(err), nil
+                }
                 return "", err
             }
             break

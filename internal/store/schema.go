@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS memory_chunks (
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+
 CREATE TABLE IF NOT EXISTS system_logs (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -105,6 +106,17 @@ CREATE TABLE IF NOT EXISTS system_logs (
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_logs_level ON system_logs(level);
 CREATE INDEX IF NOT EXISTS idx_logs_component ON system_logs(component);
+
+CREATE TABLE IF NOT EXISTS context_documents (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	title TEXT NOT NULL UNIQUE,
+	content TEXT NOT NULL,
+	description TEXT,
+	is_active BOOLEAN DEFAULT 0,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_context_docs_active ON context_documents(is_active);
 
 CREATE TABLE IF NOT EXISTS submind_sessions (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,4 +133,14 @@ CREATE TABLE IF NOT EXISTS submind_sessions (
 	FOREIGN KEY(user_id) REFERENCES users(id)
 );
 CREATE INDEX IF NOT EXISTS idx_submind_sessions_user_status ON submind_sessions(user_id, status);
+
+CREATE TABLE IF NOT EXISTS self_modifications (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	file_paths TEXT NOT NULL,
+	change_type TEXT NOT NULL,
+	description TEXT NOT NULL,
+	context TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_self_modifications_created_at ON self_modifications(created_at);
 `

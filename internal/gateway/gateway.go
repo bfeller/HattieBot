@@ -13,6 +13,7 @@ type Message struct {
 	Channel    string // "admin_term", "nextcloud_talk", etc.
 	ThreadID   string // "stream:topic", "pm:user", etc.
 	ReplyToID  string // Optional ID to reply to
+	Autonomous bool   // When true, agent's reply is not auto-routed; agent must use notify_user to send
 }
 
 // Channel defines the interface for all communication channels
@@ -30,10 +31,36 @@ type Channel interface {
 
 // Gateway manages multiple channels and routes messages to the Agent
 type Gateway struct {
-	channels map[string]Channel
-	ingress  chan Message
-	handler  func(ctx context.Context, msg Message) (string, error)
-	mu       sync.RWMutex
+	channels   map[string]Channel
+	ingress    chan Message
+	handler    func(ctx context.Context, msg Message) (string, error)
+	mu         sync.RWMutex
+	turnsMu    sync.Mutex
+	inFlight   map[string]bool
+	pending    map[string][]Message
+}
+
+// threadKey returns a key for per-thread serialization
+func threadKey(m Message) string {
+	return ThreadKey(m)
+}
+
+// ThreadKey returns a key for per-thread serialization. Exported so the agent loop can fetch pending messages.
+func ThreadKey(m Message) string {
+	if m.ThreadID != "" {
+		return m.Channel + ":" + m.ThreadID
+	}
+	return m.Channel + ":user:" + m.SenderID
+}
+
+// GetPendingAndClear returns and removes any messages that arrived while this turn was in progress.
+// The agent loop calls this between tool rounds so the model can see new user messages (e.g. "stop").
+func (g *Gateway) GetPendingAndClear(threadKey string) []Message {
+	g.turnsMu.Lock()
+	defer g.turnsMu.Unlock()
+	msgs := g.pending[threadKey]
+	delete(g.pending, threadKey)
+	return msgs
 }
 
 // New creates a new Gateway
@@ -42,6 +69,8 @@ func New(handler func(ctx context.Context, msg Message) (string, error)) *Gatewa
 		channels: make(map[string]Channel),
 		ingress:  make(chan Message, 100), // Buffer somewhat to prevent blocking
 		handler:  handler,
+		inFlight: make(map[string]bool),
+		pending:  make(map[string][]Message),
 	}
 }
 
@@ -92,26 +121,60 @@ func (g *Gateway) StartAll(ctx context.Context) error {
 	return nil
 }
 
-// processIngress reads messages from channels and sends them to the agent handler
+// processIngress reads messages from channels and sends them to the agent handler.
+// Per-thread serialization: only one turn at a time per thread. Messages that arrive
+// while a turn is in progress are queued and injected into the conversation between
+// tool rounds, so the agent can see them (e.g. "stop") and respond.
 func (g *Gateway) processIngress(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case msg := <-g.ingress:
-			// Process message via Handler (the Agent)
-			// This typically runs in a goroutine per message to handle concurrency
-			go func(m Message) {
-				replyContent, err := g.handler(ctx, m)
-				if err != nil {
-					replyContent = fmt.Sprintf("Error: %v", err)
-				}
-				
-				// Route reply back to the source channel
-				g.routeReply(m, replyContent)
-			}(msg)
+			tk := threadKey(msg)
+			g.turnsMu.Lock()
+			if g.inFlight[tk] {
+				g.pending[tk] = append(g.pending[tk], msg)
+				g.turnsMu.Unlock()
+				continue
+			}
+			g.inFlight[tk] = true
+			g.turnsMu.Unlock()
+			go g.runTurn(ctx, msg)
 		}
 	}
+}
+
+func (g *Gateway) runTurn(ctx context.Context, m Message) {
+	tk := threadKey(m)
+	defer func() {
+		g.turnsMu.Lock()
+		delete(g.inFlight, tk)
+		next := g.pending[tk]
+		if len(next) > 0 {
+			g.pending[tk] = next[1:]
+			g.inFlight[tk] = true
+			g.turnsMu.Unlock()
+			go g.runTurn(ctx, next[0])
+		} else {
+			delete(g.pending, tk)
+			g.turnsMu.Unlock()
+		}
+	}()
+	replyContent, err := g.handler(ctx, m)
+	if err != nil {
+		replyContent = fmt.Sprintf("Error: %v", err)
+	}
+	if m.Autonomous {
+		fmt.Printf("[Gateway] Autonomous task completed (reply not routed): %q\n", replyContent)
+		return
+	}
+	g.routeReply(m, replyContent)
+}
+
+// RouteReply sends content back to the appropriate channel. Exported so the agent loop can send intermediate status updates.
+func (g *Gateway) RouteReply(originalMsg Message, content string) {
+	g.routeReply(originalMsg, content)
 }
 
 // routeReply sends the agent's response back to the appropriate channel

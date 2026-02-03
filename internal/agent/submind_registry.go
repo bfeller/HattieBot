@@ -93,6 +93,13 @@ func (r *SubmindRegistry) loadDefaults() {
 			MaxTurns:     3,
 			Protected:    true,
 		},
+		{
+			Name:         "nextcloud_explorer",
+			SystemPrompt: "You are the Nextcloud Explorer. Your job is to navigate the Nextcloud instance to find files, users, or information.\n\n**SECURITY RULE**: NEVER output passwords or API keys in chat. Always use `store_secret` to save them and tell the user to check the Password Manager.\n\nUse `list_nextcloud_files` to browse directory trees.\nUse `read_nextcloud_file` to read content.\nUse `request_nextcloud_ocs` for admin queries.\nUse `get_secret` to retrieve credentials required for tasks.",
+			AllowedTools: []string{"request_nextcloud_ocs", "list_nextcloud_files", "read_nextcloud_file", "get_secret", "store_secret", "read_file", "list_dir"},
+			MaxTurns:     15,
+			Protected:    true,
+		},
 	}
 
 	for _, cfg := range defaults {

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/hattiebot/hattiebot/internal/gateway"
@@ -18,7 +19,7 @@ type SystemStatus struct {
 	MessageCount      int                               `json:"message_count"`
 	MemoryChunkCount  int                               `json:"memory_chunk_count,omitempty"`
 	LogEntryCount     int                               `json:"log_entry_count"`
-	TokenBudget       int                               `json:"token_budget"`
+	TokenBudget       string                            `json:"token_budget"`
 	RegisteredTools   []string                          `json:"registered_tools"`
 	ActiveChannels    []string                          `json:"active_channels"`
 	Components        map[string]health.ComponentHealth `json:"components"`
@@ -39,9 +40,14 @@ type SystemStatusGatherer struct {
 
 // Gather collects comprehensive system status.
 func (g *SystemStatusGatherer) Gather(ctx context.Context) (SystemStatus, error) {
+	tokenBudgetStr := "Unlimited"
+	if g.TokenBudget > 0 {
+		tokenBudgetStr = fmt.Sprintf("%d", g.TokenBudget)
+	}
+
 	status := SystemStatus{
 		Timestamp:    time.Now(),
-		TokenBudget:  g.TokenBudget,
+		TokenBudget:  tokenBudgetStr,
 		Components:   make(map[string]health.ComponentHealth),
 	}
 

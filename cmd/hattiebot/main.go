@@ -9,13 +9,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hattiebot/hattiebot/internal/agent"
 	"github.com/hattiebot/hattiebot/internal/agent/templates"
 	"github.com/hattiebot/hattiebot/internal/bootstrap"
 	"github.com/hattiebot/hattiebot/internal/channels/admin_term"
+	"github.com/hattiebot/hattiebot/internal/channels/custom_webhook"
 	"github.com/hattiebot/hattiebot/internal/channels/nextcloudtalk"
 	"github.com/hattiebot/hattiebot/internal/config"
 	"github.com/hattiebot/hattiebot/internal/core"
@@ -29,6 +32,7 @@ import (
 	"github.com/hattiebot/hattiebot/internal/scheduler"
 	"github.com/hattiebot/hattiebot/internal/store"
 	"github.com/hattiebot/hattiebot/internal/tools"
+	"github.com/hattiebot/hattiebot/internal/tools/nextcloud"
 	"github.com/hattiebot/hattiebot/internal/tui"
 	"github.com/hattiebot/hattiebot/internal/webhookserver"
 	"github.com/hattiebot/hattiebot/internal/wiring"
@@ -71,20 +75,95 @@ func run(cfg *config.Config) error {
 					return fmt.Errorf("compose SOUL.md: %w", err)
 				}
 				nextcloudURL := os.Getenv("NEXTCLOUD_URL")
-				nextcloudSecret := os.Getenv("NEXTCLOUD_TALK_BOT_SECRET")
-				if nextcloudURL != "" && nextcloudSecret != "" {
+				webhookSecret := os.Getenv("HATTIEBOT_WEBHOOK_SECRET")
+				if nextcloudURL != "" && webhookSecret != "" {
 					if err := bootstrap.WaitForNextcloud(nextcloudURL, 5*time.Minute, 15*time.Second); err != nil {
 						return fmt.Errorf("nextcloud bootstrap: %w", err)
 					}
 					botUser := os.Getenv("NEXTCLOUD_BOT_USER")
-					botPass := os.Getenv("NEXTCLOUD_BOT_APP_PASSWORD")
-					if err := bootstrap.WriteNextcloudConfig(cfg.ConfigDir, nextcloudURL, nextcloudSecret, botUser, botPass); err != nil {
-						return fmt.Errorf("write nextcloud config: %w", err)
+				botPass := os.Getenv("NEXTCLOUD_BOT_APP_PASSWORD")
+				
+				// Auto-provision if missing and admin creds available
+				adminUser := os.Getenv("NEXTCLOUD_ADMIN_USER")
+				adminPass := os.Getenv("NEXTCLOUD_ADMIN_PASSWORD")
+				
+				if (botUser == "" || botPass == "") && adminUser != "" && adminPass != "" {
+					targetBotName := name
+					if targetBotName == "" {
+						targetBotName = "hattiebot"
+					}
+					// Sanitize username
+					targetBotName = strings.ToLower(strings.ReplaceAll(targetBotName, " ", ""))
+					
+					pUser, pPass, err := bootstrap.ProvisionBotUser(nextcloudURL, adminUser, adminPass, targetBotName)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "warning: failed to auto-provision bot user: %v\n", err)
+					} else {
+						if pPass != "" {
+							botUser = pUser
+							botPass = pPass
+							fmt.Printf("Auto-provisioned Nextcloud user: %s\n", botUser)
+						} else {
+							// User exists but we don't have pass. Usage might fail if not set in config previously.
+							// But maybe it was loaded from file? No, this is compose seed block.
+							// If we are here, we are seeding config.
+							fmt.Printf("User %s exists. Assuming password manually configured or previously set.\n", pUser)
+							if botUser == "" { botUser = pUser }
+						}
 					}
 				}
+
+				if err := bootstrap.WriteNextcloudConfig(cfg.ConfigDir, nextcloudURL, webhookSecret, botUser, botPass); err != nil {
+					return fmt.Errorf("write nextcloud config: %w", err)
+				}
+				
+				// Update in-memory config strictly for the goroutine usage below
+				cfg.NextcloudBotUser = botUser
+				cfg.NextcloudBotAppPassword = botPass
+				cfg.AdminUserID = adminID
+				cfg.NextcloudURL = nextcloudURL
+
+				// Auto-archive credentials in Nextcloud Passwords app (background)
+				go func(c *config.Config, p, u string) {
+                    if c.AdminUserID == "" { return } // No one to share with
+					// Wait for Nextcloud/Passwords app to be ready (up to 5 min poll)
+                    ticker := time.NewTicker(10 * time.Second)
+                    defer ticker.Stop()
+                    timeout := time.After(5 * time.Minute)
+                    
+                    for {
+                        select {
+                        case <-timeout:
+                            fmt.Println("[Main] Timeout waiting for Nextcloud Passwords app.")
+                            return
+                        case <-ticker.C:
+                            // Try to store secret. StoreSecret handles creation and sharing.
+                            // If Passwords app is not installed, API returns error (usually 404/503/400).
+                            _, err := nextcloud.StoreSecret(c, "HattieBot Credentials", p, u, c.NextcloudURL, "Auto-generated HattieBot Admin Credentials")
+                            if err == nil {
+                                fmt.Println("[Main] Successfully archived HattieBot credentials in Nextcloud Passwords app (folder: HattieBot Secrets). Admin: open Passwords app → Shared with you.")
+                                return
+                            }
+							fmt.Printf("[Main] StoreSecret error: %v. Retrying...\n", err)
+						}
+					}
+				}(cfg, botPass, botUser)
+
+				// Init intro Talk conversation (create 1:1 room with admin, send intro)
+				go func(c *config.Config, n string) {
+					time.Sleep(30 * time.Second) // Allow Nextcloud/Talk to be ready
+					if err := bootstrap.InitIntroConversation(c, n); err != nil {
+						fmt.Printf("[Main] InitIntroConversation: %v\n", err)
+					} else {
+						fmt.Println("[Main] Intro conversation created with admin.")
+					}
+				}(cfg, name)
+
 				cf, _ = store.LoadConfigFile(cfg.ConfigDir)
 			}
-		}
+				}
+			}
+
 		if cf == nil {
 			// Optional: seed config from env for API/CI testing (no interactive first-boot)
 			if os.Getenv("HATTIEBOT_SEED_CONFIG") == "1" {
@@ -132,10 +211,10 @@ func run(cfg *config.Config) error {
 		cfg.EmbeddingDimension = cf.EmbeddingDimension
 	}
 	cfg.NextcloudURL = cf.NextcloudURL
-	cfg.NextcloudTalkBotSecret = cf.NextcloudTalkBotSecret
+	cfg.HattieBridgeWebhookSecret = cf.HattieBridgeWebhookSecret
 	cfg.NextcloudBotUser = cf.NextcloudBotUser
 	cfg.NextcloudBotAppPassword = cf.NextcloudBotAppPassword
-	if cf.NextcloudURL != "" || cf.NextcloudTalkBotSecret != "" {
+	if cf.NextcloudURL != "" || cf.HattieBridgeWebhookSecret != "" {
 		if cfg.DefaultChannel == "" {
 			cfg.DefaultChannel = "nextcloud_talk"
 		}
@@ -160,11 +239,11 @@ func run(cfg *config.Config) error {
 	if cfg.NextcloudURL == "" {
 		cfg.NextcloudURL = os.Getenv("NEXTCLOUD_URL")
 	}
-	// Prefer env for Talk bot secret so Docker/compose .env is single source of truth (must match occ talk:bot:install).
-	if v := os.Getenv("NEXTCLOUD_TALK_BOT_SECRET"); v != "" {
-		cfg.NextcloudTalkBotSecret = v
-	} else if cfg.NextcloudTalkBotSecret == "" {
-		cfg.NextcloudTalkBotSecret = os.Getenv("NEXTCLOUD_TALK_BOT_SECRET")
+	// Prefer env for webhook secret so Docker/compose .env is single source of truth (must match HattieBridge).
+	if v := os.Getenv("HATTIEBOT_WEBHOOK_SECRET"); v != "" {
+		cfg.HattieBridgeWebhookSecret = v
+	} else if cfg.HattieBridgeWebhookSecret == "" {
+		cfg.HattieBridgeWebhookSecret = os.Getenv("HATTIEBOT_WEBHOOK_SECRET")
 	}
 	if cfg.NextcloudBotUser == "" {
 		cfg.NextcloudBotUser = os.Getenv("NEXTCLOUD_BOT_USER")
@@ -190,13 +269,18 @@ func run(cfg *config.Config) error {
 	}
 	defer db.Close()
 
-    // Init builtin tools that need DB
-    tools.Init(db)
-
 	// Ensure templates exist in config dir (do not overwrite existing)
 	if err := templates.EnsureTemplates(cfg.ConfigDir); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to ensure templates: %v\n", err)
 	}
+
+	// Load file-based context documentation
+	if err := bootstrap.LoadContextDocs(ctx, db, filepath.Join(cfg.DocsDir, "context")); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to load context docs: %v\n", err)
+	}
+
+    // Init builtin tools that need DB
+    tools.Init(db)
 
 	// Load system config for modular components
 	sysCfg, err := store.LoadSystemConfig(cfg.ConfigDir)
@@ -291,11 +375,12 @@ func run(cfg *config.Config) error {
 	// 1. Admin Terminal Channel
 	gw.Register(adminterm.New())
 
-	// 2. Nextcloud Talk Channel (if configured); webhooks received via HTTP server
-	if cfg.NextcloudURL != "" && cfg.NextcloudTalkBotSecret != "" {
+	// 2. Nextcloud Talk Channel (if configured); webhooks from HattieBridge, send via chat API as Hattie user
+	if cfg.NextcloudURL != "" && cfg.HattieBridgeWebhookSecret != "" && cfg.NextcloudBotUser != "" && cfg.NextcloudBotAppPassword != "" {
 		gw.Register(nextcloudtalk.New(nextcloudtalk.Config{
-			BaseURL: cfg.NextcloudURL,
-			Secret:  cfg.NextcloudTalkBotSecret,
+			BaseURL:        cfg.NextcloudURL,
+			BotUser:        cfg.NextcloudBotUser,
+			BotAppPassword: cfg.NextcloudBotAppPassword,
 		}))
 		httpPort := 8080
 		if p := os.Getenv("HATTIEBOT_HTTP_PORT"); p != "" {
@@ -309,10 +394,20 @@ func run(cfg *config.Config) error {
 			}
 		}
 		webhookSrv := &webhookserver.Server{
-			Addr:            fmt.Sprintf(":%d", httpPort),
-			NextcloudSecret: cfg.NextcloudTalkBotSecret,
-			PushIngress:     gw.PushIngress,
+			Addr:               fmt.Sprintf(":%d", httpPort),
+			HattieBridgeSecret: cfg.HattieBridgeWebhookSecret,
+			PushIngress:        gw.PushIngress,
+			ConfigDir:          cfg.ConfigDir,
 		}
+		defaultCh := "nextcloud_talk"
+		if cfg.DefaultChannel != "" {
+			defaultCh = cfg.DefaultChannel
+		}
+		adminID := cfg.AdminUserID
+		if adminID == "" {
+			adminID = "admin"
+		}
+		gw.Register(custom_webhook.New(gw, defaultCh, adminID))
 		go func() {
 			if err := webhookSrv.Run(); err != nil {
 				fmt.Fprintf(os.Stderr, "webhook server: %v\n", err)
@@ -324,6 +419,10 @@ func run(cfg *config.Config) error {
 	router := gateway.NewRouter(gw, db)
 	if cfg.DefaultChannel != "" {
 		router.DefaultChannel = cfg.DefaultChannel
+	}
+	schedRunner.Router = router // Wire router so scheduler can deliver reminders proactively
+	if toolExec, ok := rawExecutor.(*tools.Executor); ok {
+		toolExec.Router = router // For notify_user tool
 	}
 	escalationMonitor := &scheduler.EscalationMonitor{
 		DB:     db,

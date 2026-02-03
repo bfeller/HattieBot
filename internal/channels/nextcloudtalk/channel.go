@@ -3,10 +3,6 @@ package nextcloudtalk
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,13 +15,14 @@ import (
 
 const ChannelName = "nextcloud_talk"
 
-// Config holds Nextcloud Talk bot settings.
+// Config holds Nextcloud Talk channel settings (Hattie user sends via chat API).
 type Config struct {
-	BaseURL string // Nextcloud base URL, e.g. http://nextcloud
-	Secret  string // Shared secret from occ talk:bot:install
+	BaseURL        string // Nextcloud base URL, e.g. http://nextcloud
+	BotUser        string // Hattie user (Nextcloud user) for Basic Auth
+	BotAppPassword string // Hattie user app password
 }
 
-// Channel implements gateway.Channel for Nextcloud Talk (webhook receive, OCS send).
+// Channel implements gateway.Channel for Nextcloud Talk (webhook receive via HattieBridge, chat API send as Hattie user).
 type Channel struct {
 	cfg        Config
 	httpClient *http.Client
@@ -49,7 +46,7 @@ func (c *Channel) Start(ctx context.Context, ingress chan<- gateway.Message) err
 	return nil
 }
 
-// Send posts a message to the Nextcloud Talk room (room token from msg.ThreadID or msg.ReplyToID).
+// Send posts a message to the Nextcloud Talk room via chat API as the Hattie user.
 func (c *Channel) Send(msg gateway.Message) error {
 	roomToken := msg.ThreadID
 	if roomToken == "" {
@@ -62,13 +59,23 @@ func (c *Channel) Send(msg gateway.Message) error {
 	if roomToken == "" {
 		return fmt.Errorf("nextcloud_talk: no room token (ThreadID or ReplyToID)")
 	}
+	// Parse reply ID if present, but we intentionally ignore it to avoid threaded/quoted replies
+	// (User preference: keeps chat cleaner).
+	/*
+	replyToID := 0
+	if idx := strings.Index(msg.ReplyToID, ":"); idx > 0 {
+		if n, err := fmt.Sscanf(msg.ReplyToID[idx+1:], "%d", &replyToID); err == nil && n == 1 {
+			// replyToID set
+		}
+	}
+	*/
 	return c.sendToRoom(roomToken, msg.Content, 0)
 }
 
-// sendToRoom posts a message to the given room with optional replyTo message ID.
+// sendToRoom posts a message via Talk chat API (Basic Auth as Hattie user).
 func (c *Channel) sendToRoom(roomToken, message string, replyToID int) error {
 	base := strings.TrimSuffix(c.cfg.BaseURL, "/")
-	url := base + "/ocs/v2.php/apps/spreed/api/v1/bot/" + roomToken + "/message"
+	url := base + "/ocs/v2.php/apps/spreed/api/v1/chat/" + roomToken
 	body := map[string]interface{}{
 		"message": message,
 	}
@@ -80,25 +87,14 @@ func (c *Channel) sendToRoom(roomToken, message string, replyToID int) error {
 		return err
 	}
 
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
-		return err
-	}
-	randomHex := hex.EncodeToString(random)
-	// Nextcloud verifies HMAC(random + message) with the shared secret; they use the "message" parameter, not the raw body.
-	mac := hmac.New(sha256.New, []byte(c.cfg.Secret))
-	mac.Write([]byte(randomHex))
-	mac.Write([]byte(message))
-	sig := hex.EncodeToString(mac.Sum(nil))
-
 	req, err := http.NewRequest("POST", url, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
+	req.SetBasicAuth(c.cfg.BotUser, c.cfg.BotAppPassword)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("OCS-APIRequest", "true")
-	req.Header.Set("X-Nextcloud-Talk-Bot-Random", randomHex)
-	req.Header.Set("X-Nextcloud-Talk-Bot-Signature", sig)
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -112,7 +108,7 @@ func (c *Channel) sendToRoom(roomToken, message string, replyToID int) error {
 	bodyRead, _ := io.ReadAll(resp.Body)
 	errMsg := fmt.Sprintf("nextcloud_talk send: %s %s", resp.Status, string(bodyRead))
 	if resp.StatusCode == http.StatusUnauthorized {
-		errMsg += " (check NEXTCLOUD_TALK_BOT_SECRET matches the secret used in occ talk:bot:install)"
+		errMsg += " (check NextcloudBotUser/BotAppPassword)"
 	}
 	return fmt.Errorf("%s", errMsg)
 }
@@ -120,8 +116,6 @@ func (c *Channel) sendToRoom(roomToken, message string, replyToID int) error {
 // SendProactive sends a message to a user. Without a room mapping we cannot send to a specific user;
 // the caller may pass userID as a known room token for "DM" rooms, or we fail.
 func (c *Channel) SendProactive(userID, content string) error {
-	// Nextcloud Talk: proactive to "user" requires knowing the conversation token.
-	// For simplicity we treat userID as room token when it looks like a token (e.g. not email).
 	if userID != "" && !strings.Contains(userID, "@") {
 		return c.sendToRoom(userID, content, 0)
 	}

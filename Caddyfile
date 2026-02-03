@@ -1,0 +1,4 @@
+localhost {
+    # Self-signed certificate is automatic for 'localhost'
+    reverse_proxy nextcloud:80
+}

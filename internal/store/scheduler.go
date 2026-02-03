@@ -11,8 +11,8 @@ type ScheduledPlan struct {
 	ID            int64      `json:"id"`
 	UserID        string     `json:"user_id"`
 	Description   string     `json:"description"`
-	ActionType    string     `json:"action_type"`    // "remind", "execute_tool"
-	ActionPayload string     `json:"action_payload"` // JSON
+	ActionType    string     `json:"action_type"`    // "remind", "execute_tool", "agent_prompt"
+	ActionPayload string     `json:"action_payload"` // JSON: remind={}, execute_tool={"tool","args"}, agent_prompt={"prompt","autonomous"}
 	ScheduleType  string     `json:"schedule_type"`  // "once", "daily", "weekly"
 	ScheduleValue string     `json:"schedule_value"` // time or datetime
 	NextRunAt     *time.Time `json:"next_run_at"`

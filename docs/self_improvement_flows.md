@@ -29,6 +29,20 @@ graph TD
 
 ---
 
+## 1b. Broken Tool Repair vs Core Code Changes
+
+**Broken Tool Repair** (registered tools in `$CONFIG_DIR/tools/`):
+- When a registered tool fails 3+ times, it gets `status=broken` in `tools_registry`.
+- The system prompt injects a "BROKEN TOOLS" block; the agent is prompted to repair via `spawn_submind` with mode `tool_creation`.
+- The agent edits the tool's Go source, rebuilds, re-registers. **No restart needed**—the tool is a separate binary loaded on each `execute_registered_tool` call.
+
+**Core Code Changes** (e.g. `internal/scheduler/runner.go`):
+- If the agent edits core application code (scheduler, gateway, agent loop, etc.), that code is part of the main binary.
+- Changes take effect only after: (1) rebuilding the main binary (`go build -o hattiebot ./cmd/hattiebot`), and (2) **restarting the process**.
+- The agent cannot restart itself—it would terminate the running handler. A human must rebuild and restart the container/process.
+
+---
+
 ## 2. Sub-Mind Creation Flow
 
 When the agent needs a specialized reasoning mode.

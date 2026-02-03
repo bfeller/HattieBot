@@ -44,11 +44,11 @@ type Config struct {
 	EmbeddingServiceAPIKey string
 	EmbeddingDimension   int    // 128, 256, 512, or 768; default 768
 
-	// Nextcloud (Talk webhook; optional Files/Passwords)
-	NextcloudURL            string
-	NextcloudTalkBotSecret  string
-	NextcloudBotUser        string
-	NextcloudBotAppPassword string
+	// Nextcloud (HattieBridge webhook; optional Files/Passwords)
+	NextcloudURL              string
+	HattieBridgeWebhookSecret string
+	NextcloudBotUser          string
+	NextcloudBotAppPassword   string
 	// DefaultChannel is used for proactive routing when no user preference (e.g. "admin_term", "nextcloud_talk").
 	DefaultChannel string
 }
@@ -104,10 +104,11 @@ func New(configDir string) *Config {
 		EmbeddingServiceURL:    os.Getenv("EMBEDDING_SERVICE_URL"),
 		EmbeddingServiceAPIKey: os.Getenv("EMBEDDING_SERVICE_API_KEY"),
 		EmbeddingDimension:    embedDim,
-		NextcloudURL:           os.Getenv("NEXTCLOUD_URL"),
-		NextcloudTalkBotSecret: os.Getenv("NEXTCLOUD_TALK_BOT_SECRET"),
-		NextcloudBotUser:       os.Getenv("NEXTCLOUD_BOT_USER"),
+		NextcloudURL:              os.Getenv("NEXTCLOUD_URL"),
+		HattieBridgeWebhookSecret: os.Getenv("HATTIEBOT_WEBHOOK_SECRET"),
+		NextcloudBotUser:          os.Getenv("NEXTCLOUD_BOT_USER"),
 		NextcloudBotAppPassword: os.Getenv("NEXTCLOUD_BOT_APP_PASSWORD"),
 		DefaultChannel:         defaultCh,
+		AdminUserID:            os.Getenv("NEXTCLOUD_ADMIN_USER"),
 	}
 }

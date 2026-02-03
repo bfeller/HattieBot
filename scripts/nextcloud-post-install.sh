@@ -1,31 +1,43 @@
 #!/bin/sh
-# Nextcloud Docker post-installation hook: enable Talk (spreed) and register
-# the HattieBot webhook bot via occ talk:bot:install.
-# Runs as www-data. Requires NEXTCLOUD_TALK_BOT_SECRET (and optional NAME, URL).
-# Nextcloud 32 (Talk webhook bots supported).
-# We exit 0 even if bot registration fails so the container still starts.
+# Nextcloud Docker post-installation hook: enable Talk (spreed), Passwords, and HattieBridge.
+# HattieBridge forwards Talk chat messages to HattieBot when the Hattie user is in the room.
+# Runs as www-data. Requires HATTIEBOT_WEBHOOK_SECRET, HATTIEBOT_WEBHOOK_URL, HATTIEBOT_BOT_NAME.
+# We exit 0 even if HattieBridge enable fails so the container still starts.
 
-if [ -z "${NEXTCLOUD_TALK_BOT_SECRET:-}" ]; then
-  echo "=> NEXTCLOUD_TALK_BOT_SECRET not set, skipping Talk bot registration"
-  exit 0
-fi
+echo "=> Configuring background jobs (cron) for Nextcloud maintenance..."
+php /var/www/html/occ config:system:set backgroundjobs_mode --value cron 2>/dev/null || true
 
 echo "=> Enabling Talk app (spreed)..."
 if ! php /var/www/html/occ app:enable spreed 2>/dev/null; then
-  echo "=> WARNING: Could not enable spreed (Talk); bot registration skipped"
+  echo "=> WARNING: Could not enable spreed (Talk)"
   exit 0
 fi
 
-name="${NEXTCLOUD_TALK_BOT_NAME:-HattieBot}"
-url="${NEXTCLOUD_TALK_BOT_URL:-http://hattiebot:8080/webhook/talk}"
-desc="${NEXTCLOUD_TALK_BOT_DESCRIPTION:-HattieBot agent}"
+echo "=> Installing/Enabling Passwords app..."
+php /var/www/html/occ app:install passwords || echo "=> Key: passwords app install check (might be installed)"
+php /var/www/html/occ app:enable passwords || echo "=> WARNING: Could not enable passwords app"
 
-echo "=> Registering Talk webhook bot: $name"
-# Arguments are positional: name secret url [description]
-if ! php /var/www/html/occ talk:bot:install "$name" "$NEXTCLOUD_TALK_BOT_SECRET" "$url" "$desc"; then
-  echo "=> WARNING: talk:bot:install failed; Nextcloud will still start. Run it manually in the container if needed."
+echo "=> Installing HattieBridge app (copy from /tmp/hattiebridge-src)..."
+mkdir -p /var/www/html/custom_apps
+cp -r /tmp/hattiebridge-src /var/www/html/custom_apps/hattiebridge
+echo "=> Enabling HattieBridge app..."
+if ! php /var/www/html/occ app:enable hattiebridge 2>/dev/null; then
+  echo "=> WARNING: Could not enable HattieBridge"
   exit 0
 fi
-
-echo "=> Talk bot registered successfully"
+# PHP getenv() often doesn't see Docker env in Nextcloud - write config file for HattieBridge
+# Use HATTIEBOT_BOT_NAME as single source; sanitize to lowercase (matches Nextcloud user ID)
+if [ -n "${HATTIEBOT_WEBHOOK_URL}" ] && [ -n "${HATTIEBOT_WEBHOOK_SECRET}" ] && [ -n "${HATTIEBOT_BOT_NAME}" ]; then
+  HATTIE_USER=$(echo "${HATTIEBOT_BOT_NAME}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+  php -r '
+    $u = $argv[1] ?? ""; $s = $argv[2] ?? ""; $h = $argv[3] ?? "";
+    if ($u && $s && $h) {
+      file_put_contents("/var/www/html/data/hattiebridge-config.json", json_encode(["webhook_url"=>$u,"webhook_secret"=>$s,"hattie_user"=>$h]));
+      echo "=> HattieBridge config written (hattie_user=" . $h . ")\n";
+    }
+  ' "$HATTIEBOT_WEBHOOK_URL" "$HATTIEBOT_WEBHOOK_SECRET" "$HATTIE_USER"
+else
+  echo "=> WARNING: HATTIEBOT_* env not set, HattieBridge will not forward messages"
+fi
+echo "=> HattieBridge enabled successfully"
 exit 0
