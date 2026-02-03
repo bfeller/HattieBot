@@ -37,15 +37,15 @@ services:
       HATTIEBOT_BOT_NAME: ${HATTIEBOT_BOT_NAME:-HattieBot}
       OVERWRITEPROTOCOL: https
       XDG_CACHE_HOME: /var/www/html/data/.cache
-    entrypoint: [ "/bin/sh", "/docker-entrypoint-hattiebridge.sh" ]
+    # entrypoint: [ "/bin/sh", "/docker-entrypoint-hattiebridge.sh" ]
     command: [ "apache2-foreground" ]
     volumes:
       - nextcloud_data:/var/www/html
-      # These mounts assume you are deploying from the Git repository (Stack from Git)
-      - ./apps/hattiebridge:/tmp/hattiebridge-src:ro
-      - ./scripts/nextcloud-entrypoint.sh:/docker-entrypoint-hattiebridge.sh:ro
-      - ./scripts/nextcloud-post-install.sh:/docker-entrypoint-hooks.d/post-installation/99-hattiebridge.sh:ro
-      - ./scripts/nextcloud-before-starting.sh:/docker-entrypoint-hooks.d/before-starting/99-hattiebridge-config.sh:ro
+      # Debugging: Commenting out custom scripts to isolate boot issue
+      # - ./apps/hattiebridge:/tmp/hattiebridge-src:ro
+      # - ./scripts/nextcloud-entrypoint.sh:/docker-entrypoint-hattiebridge.sh:ro
+      # - ./scripts/nextcloud-post-install.sh:/docker-entrypoint-hooks.d/post-installation/99-hattiebridge.sh:ro
+      # - ./scripts/nextcloud-before-starting.sh:/docker-entrypoint-hooks.d/before-starting/99-hattiebridge-config.sh:ro
     ports:
       - "8080:80"
 
