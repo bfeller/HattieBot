@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: nextcloud-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - nextcloud_db:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U nextcloud -d nextcloud" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nextcloud:
+    image: nextcloud:32
+    container_name: nextcloud
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD}
+      POSTGRES_HOST: db
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      NEXTCLOUD_TRUSTED_DOMAINS: ${NEXTCLOUD_TRUSTED_DOMAINS}
+      HATTIEBOT_WEBHOOK_SECRET: ${HATTIEBOT_WEBHOOK_SECRET}
+      HATTIEBOT_WEBHOOK_URL: http://hattiebot:8080/webhook/talk
+      HATTIEBOT_BOT_NAME: ${HATTIEBOT_BOT_NAME:-HattieBot}
+      OVERWRITEPROTOCOL: https
+      XDG_CACHE_HOME: /var/www/html/data/.cache
+    entrypoint: [ "/bin/sh", "/docker-entrypoint-hattiebridge.sh" ]
+    command: [ "apache2-foreground" ]
+    volumes:
+      - nextcloud_data:/var/www/html
+      # These mounts assume you are deploying from the Git repository (Stack from Git)
+      - ./apps/hattiebridge:/tmp/hattiebridge-src:ro
+      - ./scripts/nextcloud-entrypoint.sh:/docker-entrypoint-hattiebridge.sh:ro
+      - ./scripts/nextcloud-post-install.sh:/docker-entrypoint-hooks.d/post-installation/99-hattiebridge.sh:ro
+      - ./scripts/nextcloud-before-starting.sh:/docker-entrypoint-hooks.d/before-starting/99-hattiebridge-config.sh:ro
+    ports:
+      - "8080:80"
+
+  nextcloud-cron:
+    image: nextcloud:32
+    container_name: nextcloud-cron
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      nextcloud:
+        condition: service_started
+    environment:
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD}
+      POSTGRES_HOST: db
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - nextcloud_data:/var/www/html
+    entrypoint: /cron.sh
+
+  hattiebot:
+    build: .
+    image: hattiebot:latest
+    container_name: hattiebot
+    restart: unless-stopped
+    depends_on:
+      - nextcloud
+    environment:
+      HATTIEBOT_CONFIG_DIR: /data
+      CONFIG_DIR: /data
+      HATTIEBOT_COMPOSE_MODE: "1"
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      HATTIEBOT_MODEL: ${HATTIEBOT_MODEL}
+      # Env Model Fallback (same as main model initially)
+      HATTIEBOT_ENV_MODEL: ${HATTIEBOT_MODEL}
+      HATTIEBOT_BOT_NAME: ${HATTIEBOT_BOT_NAME:-HattieBot}
+      HATTIEBOT_AUDIENCE: ${HATTIEBOT_AUDIENCE}
+      HATTIEBOT_PURPOSE: ${HATTIEBOT_PURPOSE}
+      NEXTCLOUD_URL: http://nextcloud
+      HATTIEBOT_WEBHOOK_SECRET: ${HATTIEBOT_WEBHOOK_SECRET}
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD}
+      HATTIEBOT_HTTP_PORT: "8080"
+      EMBEDDING_SERVICE_URL: ${EMBEDDING_SERVICE_URL:-}
+      EMBEDDING_SERVICE_API_KEY: ${EMBEDDING_SERVICE_API_KEY:-}
+    volumes:
+      - hattiebot_data:/data
+      # Mount source workspace if needed for dev tools, otherwise optional for prod
+      - .:/workspace
+    ports:
+      - "8081:8080"
+    working_dir: /workspace
+
+volumes:
+  nextcloud_db:
+  nextcloud_data:
+  hattiebot_data:
