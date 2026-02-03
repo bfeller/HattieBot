@@ -41,11 +41,11 @@ services:
     command: [ "apache2-foreground" ]
     volumes:
       - nextcloud_data:/var/www/html
-      # Debugging: Commenting out custom scripts to isolate boot issue
-      # - ./apps/hattiebridge:/tmp/hattiebridge-src:ro
-      # - ./scripts/nextcloud-entrypoint.sh:/docker-entrypoint-hattiebridge.sh:ro
-      # - ./scripts/nextcloud-post-install.sh:/docker-entrypoint-hooks.d/post-installation/99-hattiebridge.sh:ro
-      # - ./scripts/nextcloud-before-starting.sh:/docker-entrypoint-hooks.d/before-starting/99-hattiebridge-config.sh:ro
+      # These mounts provide hooks that Nextcloud's official entrypoint will run automatically.
+      # They are now +x and have ASCII line endings.
+      - ./apps/hattiebridge:/tmp/hattiebridge-src:ro
+      - ./scripts/nextcloud-post-install.sh:/docker-entrypoint-hooks.d/post-installation/99-hattiebridge.sh:ro
+      - ./scripts/nextcloud-before-starting.sh:/docker-entrypoint-hooks.d/before-starting/99-hattiebridge-config.sh:ro
     ports:
       - "8080:80"
 
