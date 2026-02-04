@@ -424,10 +424,12 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 						"path":          map[string]string{"type": "string", "description": "URL path (e.g. /webhook/github)"},
 						"id":            map[string]string{"type": "string", "description": "Short identifier (e.g. github)"},
 						"secret_header": map[string]string{"type": "string", "description": "Header name for secret/signature"},
-						"secret_env":    map[string]string{"type": "string", "description": "Env var name for secret value"},
+						"secret_env":    map[string]string{"type": "string", "description": "Env var name for secret value (optional)"},
+						"secret_source": map[string]string{"type": "string", "description": "Source of secret: 'env' or 'passwords' (default: env)"},
+						"secret_key":    map[string]string{"type": "string", "description": "Key name for the secret (e.g. secret title in Passwords app)"},
 						"auth_type":     map[string]interface{}{"type": "string", "enum": []string{"header", "hmac_sha256"}, "description": "Auth type"},
 					},
-					"required": []string{"path", "id", "secret_header", "secret_env", "auth_type"},
+					"required": []string{"path", "id", "secret_header", "auth_type"},
 				},
 			},
 			Policy: "restricted",
@@ -1184,6 +1186,8 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 			ID           string `json:"id"`
 			SecretHeader string `json:"secret_header"`
 			SecretEnv    string `json:"secret_env"`
+			SecretSource string `json:"secret_source"`
+			SecretKey    string `json:"secret_key"`
 			AuthType     string `json:"auth_type"`
 		}
 		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -1209,6 +1213,8 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 			ID:           args.ID,
 			SecretHeader: args.SecretHeader,
 			SecretEnv:    args.SecretEnv,
+			SecretSource: args.SecretSource,
+			SecretKey:    args.SecretKey,
 			AuthType:     args.AuthType,
 		})
 		if err := store.SaveWebhookRoutes(e.ConfigDir, routes); err != nil {
