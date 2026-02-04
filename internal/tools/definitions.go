@@ -70,6 +70,24 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 		{
 			Type: "function",
 			Function: openrouter.FunctionSpec{
+				Name:        "manage_trust",
+				Description: "Manage trusted identities (email, phone, etc.) for verifying webhook sources.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"action": map[string]interface{}{"type": "string", "enum": []string{"add", "remove", "check"}, "description": "Action to perform"},
+						"type":   map[string]string{"type": "string", "description": "Identity type (email, phone, api_key)"},
+						"value":  map[string]string{"type": "string", "description": "Identity value (e.g. user@example.com)"},
+						"notes":  map[string]string{"type": "string", "description": "Optional notes"},
+					},
+					"required": []string{"action", "type", "value"},
+				},
+			},
+			Policy: "admin_only",
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
 				Name:        "read_file",
 				Description: "Read the contents of a file. Path is relative to workspace.",
 				Parameters: map[string]interface{}{
