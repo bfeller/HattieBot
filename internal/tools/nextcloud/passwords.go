@@ -51,10 +51,12 @@ func GetNextcloudSecret(cfg *config.Config, query string) (string, error) {
         }
         if strings.Contains(strings.ToLower(title), strings.ToLower(query)) {
             // Found. Get details (password might be hidden or in detailed view).
-            // Usually list returns details including 'password' field if authorized.
-            pass, _ := item["password"].(string)
+            // Do NOT return the actual password. Return a reference.
             login, _ := item["username"].(string)
-            return fmt.Sprintf("Title: %s\nUser: %s\nPass: %s", title, login, pass), nil
+            ref := fmt.Sprintf("{{secret:%s}}", title)
+            
+            output := fmt.Sprintf("Title: %s\nUser: %s\nSecretRef: %s\n\nIMPORTANT: Do NOT use the SecretRef directly in commands.\nInstead, pass it in the 'env_vars' field of run_terminal_cmd.\nExample: {\"command\": \"echo $MY_SECRET\", \"env_vars\": {\"MY_SECRET\": \"%s\"}}", title, login, ref, ref)
+            return output, nil
         }
     }
 

@@ -143,4 +143,14 @@ CREATE TABLE IF NOT EXISTS self_modifications (
 	context TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_self_modifications_created_at ON self_modifications(created_at);
+
+CREATE TABLE IF NOT EXISTS trusted_identities (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	type TEXT NOT NULL, -- email, phone, api_key
+	value TEXT NOT NULL,
+	notes TEXT,
+	added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	UNIQUE(type, value)
+);
+CREATE INDEX IF NOT EXISTS idx_trusted_identities_type_value ON trusted_identities(type, value);
 `

@@ -11,8 +11,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/google/uuid"
+
 	"github.com/hattiebot/hattiebot/internal/gateway"
+	"github.com/hattiebot/hattiebot/internal/core"
 
 	"github.com/hattiebot/hattiebot/internal/secrets"
 	"github.com/hattiebot/hattiebot/internal/store"
@@ -62,6 +63,7 @@ type Server struct {
 
 	ConfigDir          string // for dynamic webhook routes
 	SecretStore        *secrets.MultiStore
+	ToolExecutor       core.ToolExecutor
 }
 
 // Run starts the HTTP server and blocks.
@@ -292,21 +294,41 @@ func (s *Server) handleDynamicWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	threadID := route.ID + ":" + uuid.New().String()
-	msg := gateway.Message{
-		SenderID:   "webhook:" + route.ID,
-		Content:    string(body),
-		Channel:    customWebhookChannel,
-		ThreadID:   threadID,
-		ReplyToID:  threadID,
-	}
-	if s.PushIngress == nil {
-		w.WriteHeader(http.StatusOK)
+
+	
+	// Secure Routing: Enforce TargetTool
+	if route.TargetTool == "" {
+		log.Printf("[WebhookServer] dynamic webhook %s: missing target_tool", path)
+		http.Error(w, "configuration error", http.StatusInternalServerError)
 		return
 	}
-	if !s.PushIngress(msg) {
-		log.Printf("[WebhookServer] dynamic webhook %s: ingress buffer full", path)
+	
+	// Construct Arguments
+	argsJSON := route.TargetArgs
+	if argsJSON == "" {
+		argsJSON = "{}"
 	}
-	log.Printf("[WebhookServer] received webhook from %s at %s", route.ID, path)
+	if strings.Contains(argsJSON, "{{payload}}") {
+		// Encode body as JSON string to safely embed in JSON template
+		b, _ := json.Marshal(string(body))
+		// Replace {{payload}} with "body_content" (including quotes)
+		argsJSON = strings.ReplaceAll(argsJSON, "{{payload}}", string(b))
+	}
+
+	// Execute Tool
+	log.Printf("[WebhookServer] triggering tool %s for webhook %s", route.TargetTool, path)
+	if s.ToolExecutor != nil {
+		result, runErr := s.ToolExecutor.Execute(r.Context(), route.TargetTool, argsJSON)
+		if runErr != nil {
+			log.Printf("[WebhookServer] tool execution failed: %v", runErr)
+			// We return 200 to webhook caller to avoid retries on internal failure? 
+			// Or 500? Use 200 to acknowledge receipt.
+		} else {
+			log.Printf("[WebhookServer] tool result: %s", result)
+		}
+	} else {
+		log.Printf("[WebhookServer] dispatcher missing (ToolExecutor), dropping webhook")
+	}
+
 	w.WriteHeader(http.StatusOK)
 }

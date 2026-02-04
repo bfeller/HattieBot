@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
@@ -12,11 +14,18 @@ import (
 )
 
 // ExecuteRegisteredTool runs the binary at the given path with JSON args on stdin; returns stdout and exit code.
-func ExecuteRegisteredTool(ctx context.Context, binaryPath, argsJSON string) (stdout, stderr string, exitCode int, err error) {
+func ExecuteRegisteredTool(ctx context.Context, binaryPath, argsJSON string, envVars map[string]string) (stdout, stderr string, exitCode int, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binaryPath)
 	cmd.Stdin = bytes.NewReader([]byte(argsJSON))
+	
+	// Add env vars
+	cmd.Env = os.Environ()
+	for k, v := range envVars {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	}
+
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -35,7 +44,7 @@ func ExecuteRegisteredTool(ctx context.Context, binaryPath, argsJSON string) (st
 
 // ExecuteRegisteredToolByName looks up the tool by name in the registry and runs it.
 // If binaryPath in the registry is relative, it is resolved against workspaceDir.
-func ExecuteRegisteredToolByName(ctx context.Context, db store.ToolRegistry, workspaceDir, name, argsJSON string) (string, error) {
+func ExecuteRegisteredToolByName(ctx context.Context, db store.ToolRegistry, workspaceDir, name, argsJSON string, envVars map[string]string) (string, error) {
 	tool, err := db.ToolByName(ctx, name)
 	if err != nil {
 		out, _ := json.Marshal(map[string]string{"error": err.Error()})
@@ -49,7 +58,7 @@ func ExecuteRegisteredToolByName(ctx context.Context, db store.ToolRegistry, wor
 	if !filepath.IsAbs(binaryPath) && workspaceDir != "" {
 		binaryPath = filepath.Join(workspaceDir, filepath.Clean(binaryPath))
 	}
-	stdout, stderr, code, _ := ExecuteRegisteredTool(ctx, binaryPath, argsJSON)
+	stdout, stderr, code, _ := ExecuteRegisteredTool(ctx, binaryPath, argsJSON, envVars)
 	out := map[string]interface{}{
 		"stdout":    stdout,
 		"stderr":    stderr,

@@ -59,7 +59,8 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 					"type": "object",
 					"properties": map[string]interface{}{
 						"work_dir": map[string]string{"type": "string", "description": "Working directory (default: workspace root)"},
-						"command":  map[string]string{"type": "string", "description": "Shell command to run"},
+						"command":  map[string]string{"type": "string", "description": "Shell command to run. Use environment variables (e.g. $MY_SECRET) for secrets."},
+						"env_vars": map[string]string{"type": "string", "description": "Environment variables to set. Map variable names to values (or {{secret:Title}} refs)."},
 					},
 					"required": []string{"command"},
 				},
@@ -129,6 +130,7 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 					"type": "object",
 					"properties": map[string]interface{}{
 						"instruction": map[string]string{"type": "string", "description": "Natural language instruction for the CLI"},
+						"env_vars": map[string]string{"type": "string", "description": "Environment variables to set. Map variable names to values (or {{secret:Title}} refs)."},
 					},
 					"required": []string{"instruction"},
 				},
@@ -144,6 +146,7 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 					"properties": map[string]interface{}{
 						"name": map[string]string{"type": "string", "description": "Tool name in registry"},
 						"args": map[string]interface{}{"type": "object", "description": "JSON object of arguments"},
+						"env_vars": map[string]string{"type": "string", "description": "Environment variables to set."},
 					},
 					"required": []string{"name"},
 				},
@@ -287,8 +290,9 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 					"type": "object",
 					"properties": map[string]interface{}{
 						"image":    map[string]string{"type": "string", "description": "Docker image (default: debian:bookworm-slim)"},
-						"command":  map[string]string{"type": "string", "description": "Command to run"},
+						"command":  map[string]string{"type": "string", "description": "Command to run. Use env vars for secrets."},
 						"work_dir": map[string]string{"type": "string", "description": "Working directory inside container"},
+						"env_vars": map[string]string{"type": "string", "description": "Environment variables to set inside container."},
 					},
 					"required": []string{"command"},
 				},
@@ -428,8 +432,10 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 						"secret_source": map[string]string{"type": "string", "description": "Source of secret: 'env' or 'passwords' (default: env)"},
 						"secret_key":    map[string]string{"type": "string", "description": "Key name for the secret (e.g. secret title in Passwords app)"},
 						"auth_type":     map[string]interface{}{"type": "string", "enum": []string{"header", "hmac_sha256"}, "description": "Auth type"},
+						"target_tool":   map[string]string{"type": "string", "description": "Name of the tool to execute (required)"},
+						"target_args":   map[string]string{"type": "string", "description": "JSON arguments for the tool. Use {{payload}} for webhook body."},
 					},
-					"required": []string{"path", "id", "secret_header", "auth_type"},
+					"required": []string{"path", "id", "secret_header", "auth_type", "target_tool"},
 				},
 			},
 			Policy: "restricted",
@@ -617,7 +623,7 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 			Type: "function",
 			Function: openrouter.FunctionSpec{
 				Name:        "get_secret",
-				Description: "Retrieve a password/secret from Nextcloud Passwords app.",
+				Description: "Retrieve a secure reference to a password/secret from Nextcloud Passwords app.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -716,22 +722,32 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 			
 			val, err := e.SecretStore.GetSecret(source, key)
 			if err != nil {
-				// Don't leak error details to tool execution, just fail or leave placeholder?
-				// Better to fail execution if secret is missing.
-				// But we are inside ReplaceAllStringFunc, can't easily error out.
-				// We'll leave a marked error string so JSON unmarshal might fail or tool sees it.
-				// Or better: check for secrets BEFORE replacement loop?
 				return "ERROR_MISSING_SECRET" 
 			}
-			// Escape value for JSON string?
-			// If the secret contains quotes, it will break JSON if we just paste it.
-			// argsJSON is a JSON string. We are replacing a substring inside it.
-			// The secret is likely inside a JSON string value: "password": "{{secret:foo}}"
-			// So we need to JSON-escape the secret value.
+			// JSON Escape: The secret is likely inside a JSON string value.
+			// e.g. "env_vars": {"KEY": "{{secret:foo}}"} -> "env_vars": {"KEY": "value"}
+			// We need to ensure 'value' is properly escaped for JSON.
+			
+			// Simple replace works if we trust the secret content not to break the JSON structure excessively
+			// (e.g. if secret has quotes).
 			b, _ := json.Marshal(val)
 			s := string(b)
-			// json.Marshal returns "value", including quotes. We need inner content.
+			// json.Marshal returns "value". We need inner content if we are substituting inside existing quotes?
+			// The original regex match {{secret:...}} is usually inside quotes in the argsJSON string.
+			// argsJSON: { "key": "{{secret:foo}}" }
+			// replacement: "password" (with quotes) -> { "key": ""password"" } -> INVALID
+			
+			// If the original string had quotes around the placeholder, we should be careful.
+			// But the regex doesn't match the quotes. 
+			// match is {{secret:foo}}
+			// context: "...": "{{secret:foo}}"
+			
+			// If we return the raw value, e.g. basicpassword, result is "...": "basicpassword". Good.
+			// If raw value has quotes: pass"word, result is "...": "pass"word". BAD (invalid JSON).
+			// So we MUST escape the value, BUT without the surrounding quotes from json.Marshal.
+			
 			if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+				// Strip surrounding quotes from Marshal result, but keep internal escaping (e.g. \" for ")
 				return s[1 : len(s)-1]
 			}
 			return val
@@ -763,6 +779,7 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 		return ReadArchitectureTool(ctx, e.DocsDir, argsJSON)
 
 	case "autohand_cli":
+		// Wrapper function inside autohand.go handles JSON parsing and env_vars extraction
 		return AutohandCLITool(ctx, argsJSON)
 	case "manage_context_doc":
 		return ManageContextDocTool(ctx, e.DB, argsJSON)
@@ -861,9 +878,10 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 		return string(b), nil
 	case "run_sandboxed":
 		var args struct {
-			Image    string `json:"image"`
-			Command  string `json:"command"`
-			WorkDir  string `json:"work_dir"`
+			Image    string            `json:"image"`
+			Command  string            `json:"command"`
+			WorkDir  string            `json:"work_dir"`
+			EnvVars  map[string]string `json:"env_vars"`
 		}
 		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 			return ErrJSON(err), nil
@@ -878,7 +896,14 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 		// Security: Validate WorkDir?
 		// Note: Host mounting /workspace:/workspace allows access to project source.
 		
-		cmdArgs := []string{"run", "--rm", "-i", "-v", "/workspace:/workspace", "-w", args.WorkDir, args.Image, "/bin/sh", "-c", args.Command}
+		cmdArgs := []string{"run", "--rm", "-i", "-v", "/workspace:/workspace", "-w", args.WorkDir}
+		
+		// Add env vars
+		for k, v := range args.EnvVars {
+			cmdArgs = append(cmdArgs, "-e", fmt.Sprintf("%s=%s", k, v))
+		}
+		
+		cmdArgs = append(cmdArgs, args.Image, "/bin/sh", "-c", args.Command)
 		cmd := exec.CommandContext(ctx, "docker", cmdArgs...)
 		var out bytes.Buffer
 		var stderr bytes.Buffer
@@ -1059,8 +1084,9 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 		return `{"status": "deleted"}`, nil
 	case "execute_registered_tool":
 		var args struct {
-			Name string          `json:"name"`
-			Args json.RawMessage `json:"args"`
+			Name    string            `json:"name"`
+			Args    json.RawMessage   `json:"args"`
+			EnvVars map[string]string `json:"env_vars"`
 		}
 		if argsJSON != "" {
 			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -1072,7 +1098,7 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 		if len(args.Args) > 0 {
 			argsStr = string(args.Args)
 		}
-		result, err := ExecuteRegisteredToolByName(ctx, e.DB, e.WorkspaceDir, args.Name, argsStr)
+		result, err := ExecuteRegisteredToolByName(ctx, e.DB, e.WorkspaceDir, args.Name, argsStr, args.EnvVars)
 		if err != nil {
 			return result, err
 		}
@@ -1189,6 +1215,8 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 			SecretSource string `json:"secret_source"`
 			SecretKey    string `json:"secret_key"`
 			AuthType     string `json:"auth_type"`
+			TargetTool   string `json:"target_tool"`
+			TargetArgs   string `json:"target_args"`
 		}
 		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 			return ErrJSON(err), nil
@@ -1216,6 +1244,8 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 			SecretSource: args.SecretSource,
 			SecretKey:    args.SecretKey,
 			AuthType:     args.AuthType,
+			TargetTool:   args.TargetTool,
+			TargetArgs:   args.TargetArgs,
 		})
 		if err := store.SaveWebhookRoutes(e.ConfigDir, routes); err != nil {
 			return ErrJSON(err), nil
@@ -1444,6 +1474,43 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 			return ErrJSON(err), nil
 		}
 		return nextcloud.StoreSecret(e.Config, args.Title, args.Password, args.Login, args.URL, args.Notes)
+	case "manage_trust":
+		var args struct {
+			Action string `json:"action"`
+			Type   string `json:"type"`
+			Value  string `json:"value"`
+			Notes  string `json:"notes"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return ErrJSON(err), nil
+		}
+		switch args.Action {
+		case "add":
+			if err := e.DB.AddTrustedIdentity(ctx, args.Type, args.Value, args.Notes); err != nil {
+				return ErrJSON(err), nil
+			}
+			return `{"status": "added"}`, nil
+		case "remove":
+			if err := e.DB.RemoveTrustedIdentity(ctx, args.Type, args.Value); err != nil {
+				return ErrJSON(err), nil
+			}
+			return `{"status": "removed"}`, nil
+		case "check":
+			trusted, err := e.DB.CheckTrustedIdentity(ctx, args.Type, args.Value)
+			if err != nil {
+				return ErrJSON(err), nil
+			}
+			return fmt.Sprintf(`{"trusted": %v}`, trusted), nil
+		case "list":
+			identities, err := e.DB.ListTrustedIdentities(ctx, args.Type)
+			if err != nil {
+				return ErrJSON(err), nil
+			}
+			b, _ := json.Marshal(identities)
+			return string(b), nil
+		default:
+			return ErrJSON(fmt.Errorf("unknown action: %s", args.Action)), nil
+		}
 
 	default:
 		out, _ := json.Marshal(map[string]string{"error": "unknown tool: " + name})

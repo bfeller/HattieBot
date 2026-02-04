@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -73,7 +74,7 @@ func ensureAutohandConfig() (configPath string, err error) {
 // AutohandCLI invokes the Autohand CLI with the given instruction (e.g. autohand -p "instruction").
 // Uses --yes and --unrestricted for non-interactive use (no TTY); --path for workspace.
 // Ensures autohand config exists to avoid first-run login prompt.
-func AutohandCLI(ctx context.Context, instruction string) (stdout, stderr string, err error) {
+func AutohandCLI(ctx context.Context, instruction string, envVars map[string]string) (stdout, stderr string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	// --yes: auto-confirm risky actions
@@ -95,7 +96,13 @@ func AutohandCLI(ctx context.Context, instruction string) (stdout, stderr string
 		args = append([]string{"--config", autohandConfig}, args...)
 	}
 	cmd := exec.CommandContext(ctx, "autohand", args...)
+	
+	// Env
 	cmd.Env = os.Environ() // Inherit OPENROUTER_API_KEY and other env
+	for k, v := range envVars {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	}
+	
 	// Pipe newlines so if autohand prompts "Press Enter to continue" it gets input and proceeds
 	cmd.Stdin = strings.NewReader("\n\n\n\n\n")
 	out, err := cmd.CombinedOutput()
@@ -107,10 +114,11 @@ func AutohandCLI(ctx context.Context, instruction string) (stdout, stderr string
 	return output, "", nil
 }
 
-// AutohandCLITool args: {"instruction": "..."}. Returns {"stdout": "...", "stderr": "...", "error": "..."}.
+// AutohandCLITool args: {"instruction": "...", "env_vars": {...}}. Returns {"stdout": "...", "stderr": "...", "error": "..."}.
 func AutohandCLITool(ctx context.Context, argsJSON string) (string, error) {
 	var args struct {
-		Instruction string `json:"instruction"`
+		Instruction string            `json:"instruction"`
+		EnvVars     map[string]string `json:"env_vars"`
 	}
 	if argsJSON != "" {
 		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -119,7 +127,7 @@ func AutohandCLITool(ctx context.Context, argsJSON string) (string, error) {
 	}
 	// Prepend strict instruction to overwrite files
 	fullInstruction := "IMPORTANT: If the target file exists, you MUST overwrite it with the new code. Do not skip writing. " + args.Instruction
-	stdout, stderr, err := AutohandCLI(ctx, fullInstruction)
+	stdout, stderr, err := AutohandCLI(ctx, fullInstruction, args.EnvVars)
 	m := map[string]string{"stdout": stdout, "stderr": stderr}
 	if err != nil {
 		m["error"] = err.Error()

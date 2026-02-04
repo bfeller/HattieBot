@@ -20,6 +20,11 @@ type WebhookRoute struct {
 	// If empty and SecretSource is "passwords", SecretEnv is used as the key.
 	SecretKey    string `json:"secret_key,omitempty"`
 	AuthType     string `json:"auth_type"` // "header" or "hmac_sha256"
+	
+	// TargetTool is the name of the tool to execute (required for dynamic routes).
+	TargetTool   string `json:"target_tool,omitempty"`
+	// TargetArgs is a JSON template for tool arguments. Supports {{payload}} placeholder.
+	TargetArgs   string `json:"target_args,omitempty"`
 }
 
 // LoadWebhookRoutes reads routes from $CONFIG_DIR/webhook_routes.json.

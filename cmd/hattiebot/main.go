@@ -433,6 +433,7 @@ func run(cfg *config.Config) error {
 			PushIngress:        gw.PushIngress,
 			ConfigDir:          cfg.ConfigDir,
 			SecretStore:        secretStore,
+			ToolExecutor:       executor,
 		}
 		defaultCh := "nextcloud_talk"
 		if cfg.DefaultChannel != "" {

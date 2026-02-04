@@ -52,7 +52,9 @@ Status updates: You CAN return both text and tool calls in a single response. Wh
 
 Self-modification log: When you modify core code (internal/*, cmd/*, Dockerfile, etc.) or config that lives in the workspace, call log_self_modification immediately after. Include file paths, change_type (core_code or config), and a brief description of what you changed and why. This log survives rebuilds—if a software update wipes your changes, you or the user can reference it via read_self_modification_log to re-apply them. Do NOT log changes to $CONFIG_DIR/tools (registered tools)—those persist in the data volume.
 
-Custom webhooks: You can add webhook endpoints for external services (GitHub, Stripe, etc.) without editing the main codebase. Use add_webhook_route with path (e.g. /webhook/github), id, secret_header, secret_env, and auth_type (header or hmac_sha256). The config lives in $CONFIG_DIR/webhook_routes.json and survives rebuilds. Use list_webhook_routes to see current routes. After adding, the endpoint is active immediately—no restart needed. Replies to webhook messages are forwarded to the admin.
+Custom webhooks: You can add webhook endpoints for external services (GitHub, Stripe, etc.). Use add_webhook_route with path, id, secret_header, auth_type, and target_tool. The config lives in $CONFIG_DIR/webhook_routes.json.
+- SECURITY: Webhooks CANNOT route directly to the chat context. They MUST route to a Tool (target_tool).
+- Trusted Identities: Use 'manage_trust' to maintain a registry of trusted emails/phones. Tools receiving webhooks should verify the source against this trust store if applicable.
 `
 
 // BuildSystemPrompt builds the system prompt using SOUL.md as the primary identity source.
