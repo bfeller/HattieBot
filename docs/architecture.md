@@ -90,14 +90,14 @@ The agent has a powerful set of native capabilities:
 
 ### Configurable Webhooks
 - `list_webhook_routes`: List registered webhook endpoints.
-- `add_webhook_route`: Add a webhook endpoint (path, id, secret_header, secret_env, auth_type).
-- `remove_webhook_route`: Remove a webhook route by path or id.
+   - `add_webhook_route`: Add a webhook endpoint (path, id, secret_header, secret_env, secret_source, secret_key, auth_type).
+   - `remove_webhook_route`: Remove a webhook route by path or id.
 
 ## 5. Extension Points
 
 1. **New Tools**: The agent can write Go code, build it, and register it via `register_tool`. These persist in `$CONFIG_DIR/tools`.
 2. **New Sub-Minds**: The agent can define new workflow modes via `manage_submind`.
 3. **New Providers**: The agent can add support for new LLMs via `manage_llm_provider`.
-4. **Configurable Webhooks**: The agent can add webhook endpoints for external services (GitHub, Stripe, etc.) via `add_webhook_route`. Routes are stored in `$CONFIG_DIR/webhook_routes.json` and persist across rebuilds. Secrets are read from environment variables (never stored in the config). Supports `header` (exact match) and `hmac_sha256` (GitHub-style) auth. Replies to webhook messages are forwarded to the admin.
+4. **Configurable Webhooks**: The agent can add webhook endpoints for external services (GitHub, Stripe, etc.) via `add_webhook_route`. Routes are stored in `$CONFIG_DIR/webhook_routes.json` and persist across rebuilds. Secrets can be read from environment variables OR the Nextcloud Passwords app (configured via `secret_source`). Supports `header` (exact match) and `hmac_sha256` (GitHub-style) auth. Replies to webhook messages are forwarded to the admin.
 
 5. **Autonomous Scheduled Tasks**: The scheduler supports `agent_prompt` with `autonomous=true`. The agent runs its full loop without user interaction; it must call `notify_user` only when something needs attention. Otherwise the task completes silently.
