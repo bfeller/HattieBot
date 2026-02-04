@@ -16,22 +16,49 @@ class Application extends App implements IBootstrap {
 	public function __construct() {
 		parent::__construct('hattiebridge');
 
-		// Include composer autoloader for PSR-4 class loading
-		$autoloadFile = __DIR__ . '/../../vendor/autoload.php';
-		if (file_exists($autoloadFile)) {
-			include_once $autoloadFile;
+		$listenerClass = 'OCA\\HattieBridge\\Listener\\ChatMessageSentListener';
+		$autoload = __DIR__ . '/../../vendor/autoload.php';
+		$listenerFile = __DIR__ . '/../Listener/ChatMessageSentListener.php';
+
+		if (is_file($autoload)) {
+			require_once $autoload;
+		}
+		if (!class_exists($listenerClass, false) && file_exists($listenerFile)) {
+			require_once $listenerFile;
 		}
 	}
 
 	public function register(IRegistrationContext $context): void {
 		$this->debugLog('Application::register() called - HattieBridge loading');
 
-		// Register the listener class in the container so DI can instantiate it
-		$context->registerService(ChatMessageSentListener::class, function ($c) {
-			return new ChatMessageSentListener();
-		});
+		// Skip listener if disabled (for debugging 500 errors)
+		if (getenv('HATTIEBRIDGE_DISABLED') === '1') {
+			$this->debugLog('HattieBridge listener disabled via HATTIEBRIDGE_DISABLED');
+			return;
+		}
 
-		$context->registerEventListener(ChatMessageSentEvent::class, ChatMessageSentListener::class);
+		$listenerClass = 'OCA\\HattieBridge\\Listener\\ChatMessageSentListener';
+		$listenerFile = __DIR__ . '/../Listener/ChatMessageSentListener.php';
+
+		// Use string for class_exists to avoid fatal if class not loaded
+		if (!class_exists($listenerClass, false)) {
+			$this->debugLog('ChatMessageSentListener class not found (file=' . $listenerFile . ' exists=' . (file_exists($listenerFile) ? 'yes' : 'no') . '), skipping listener');
+			return;
+		}
+		$this->debugLog('ChatMessageSentListener class loaded, registering...');
+
+		try {
+			$context->registerService($listenerClass, function ($c) {
+				$this->debugLog('ChatMessageSentListener factory: instantiating');
+				return new ChatMessageSentListener();
+			});
+
+			$context->registerEventListener(ChatMessageSentEvent::class, $listenerClass);
+			$this->debugLog('HattieBridge listener registered successfully');
+		} catch (\Throwable $e) {
+			$this->debugLog('Failed to register listener: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
+			// Do not rethrow - allow Talk to work without our listener
+		}
 	}
 
 	private function debugLog(string $msg): void {

@@ -275,6 +275,15 @@ To use an existing embedding service (e.g. `https://embedding.bfs5.com`), use [d
 
 **403 on webhook or send failures:** Ensure `HATTIEBOT_WEBHOOK_SECRET` in `.env` matches the value passed to the Nextcloud container (HattieBridge uses it to authenticate to HattieBot). For send failures, ensure the Hattie user was auto-provisioned (check logs for "Auto-provisioned Nextcloud user"). Rebuild after code changes: `docker compose -f docker-compose.nextcloud.yml build hattiebot && docker compose -f docker-compose.nextcloud.yml up -d`.
 
+**500 Internal Server Error on intro message:** If HattieBot fails to send the first intro message (`statuscode: 996`), capture the PHP stack trace:
+
+```bash
+docker exec nextcloud tail -150 /var/www/html/data/nextcloud.log
+docker exec nextcloud tail -50 /var/www/html/data/hattiebridge-debug.log
+```
+
+The `nextcloud.log` shows the exact PHP error and stack trace. The `hattiebridge-debug.log` shows whether the listener registered and ran (`[APP] HattieBridge listener registered successfully`, `[LISTENER] handle() ENTRY`). To isolate: set `HATTIEBRIDGE_DISABLED=1` in the Nextcloud container env and redeploy; if the intro succeeds, the issue is in HattieBridge.
+
 ---
 
 ## Documentation
@@ -300,3 +309,5 @@ Contributions are welcome. Open an issue or PR on [GitHub](https://github.com/bf
 ## License
 
 Add a `LICENSE` file to the repository root for your chosen license (e.g. MIT, Apache-2.0).
+
+

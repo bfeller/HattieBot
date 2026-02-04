@@ -62,6 +62,8 @@ services:
       HATTIEBOT_WEBHOOK_SECRET: ${HATTIEBOT_WEBHOOK_SECRET}
       HATTIEBOT_WEBHOOK_URL: http://hattiebot:8080/webhook/talk
       HATTIEBOT_BOT_NAME: ${HATTIEBOT_BOT_NAME:-HattieBot}
+      # Set to "1" to disable HattieBridge listener (debug 500 on intro message)
+      HATTIEBRIDGE_DISABLED: ${HATTIEBRIDGE_DISABLED:-}
       OVERWRITEPROTOCOL: https
       XDG_CACHE_HOME: /var/www/html/data/.cache
     # entrypoint: [ "/bin/sh", "/docker-entrypoint-hattiebridge.sh" ]

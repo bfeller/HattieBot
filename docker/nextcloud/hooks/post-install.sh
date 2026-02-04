@@ -20,6 +20,9 @@ php /var/www/html/occ app:enable passwords || echo "=> WARNING: Could not enable
 echo "=> Installing HattieBridge app (copy from /tmp/hattiebridge-src)..."
 mkdir -p /var/www/html/custom_apps
 cp -r /tmp/hattiebridge-src /var/www/html/custom_apps/hattiebridge
+if command -v composer >/dev/null 2>&1; then
+  (cd /var/www/html/custom_apps/hattiebridge && composer dump-autoload --no-dev 2>/dev/null) || true
+fi
 echo "=> Enabling HattieBridge app..."
 if ! php /var/www/html/occ app:enable hattiebridge 2>/dev/null; then
   echo "=> WARNING: Could not enable HattieBridge"

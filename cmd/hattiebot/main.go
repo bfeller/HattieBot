@@ -151,7 +151,7 @@ func run(cfg *config.Config) error {
 
 				// Init intro Talk conversation (create 1:1 room with admin, send intro)
 				go func(c *config.Config, n string) {
-					time.Sleep(30 * time.Second) // Allow Nextcloud/Talk to be ready
+					time.Sleep(60 * time.Second) // Allow Nextcloud/Talk to be ready (fresh install needs more time)
 					if err := bootstrap.InitIntroConversation(c, n); err != nil {
 						fmt.Printf("[Main] InitIntroConversation: %v\n", err)
 					} else {

@@ -88,29 +88,44 @@ func InitIntroConversation(cfg *config.Config, botName string) error {
 		return fmt.Errorf("no room token in response")
 	}
 
-	// 2. Send intro via chat API
+	// Brief delay: room creation may trigger async work (participants, signaling); wait before posting
+	time.Sleep(3 * time.Second)
+
+	// 2. Send intro via chat API (retry: Talk may still be initializing after fresh install)
 	intro := fmt.Sprintf("Hi! I'm %s. I'm here to help. You can ask me anything—just start typing!", botName)
 	chatURL := base + "/ocs/v2.php/apps/spreed/api/v1/chat/" + token
 	chatBody := fmt.Sprintf(`{"message":%s}`, jsonEscape(intro))
 
-	chatReq, err := http.NewRequest("POST", chatURL, strings.NewReader(chatBody))
-	if err != nil {
-		return fmt.Errorf("intro request: %w", err)
-	}
-	chatReq.SetBasicAuth(cfg.NextcloudBotUser, cfg.NextcloudBotAppPassword)
-	chatReq.Header.Set("Content-Type", "application/json")
-	chatReq.Header.Set("OCS-APIRequest", "true")
-	chatReq.Header.Set("Accept", "application/json")
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(10 * time.Second)
+		}
+		chatReq, err := http.NewRequest("POST", chatURL, strings.NewReader(chatBody))
+		if err != nil {
+			return fmt.Errorf("intro request: %w", err)
+		}
+		chatReq.SetBasicAuth(cfg.NextcloudBotUser, cfg.NextcloudBotAppPassword)
+		chatReq.Header.Set("Content-Type", "application/json")
+		chatReq.Header.Set("OCS-APIRequest", "true")
+		chatReq.Header.Set("Accept", "application/json")
 
-	chatResp, err := client.Do(chatReq)
-	if err != nil {
-		return fmt.Errorf("send intro: %w", err)
-	}
-	defer chatResp.Body.Close()
-
-	if chatResp.StatusCode != http.StatusCreated {
+		chatResp, err := client.Do(chatReq)
+		if err != nil {
+			lastErr = fmt.Errorf("send intro: %w", err)
+			continue
+		}
 		chatBodyRead, _ := io.ReadAll(chatResp.Body)
-		return fmt.Errorf("send intro: %s %s", chatResp.Status, string(chatBodyRead))
+		chatResp.Body.Close()
+
+		if chatResp.StatusCode == http.StatusCreated {
+			lastErr = nil
+			break
+		}
+		lastErr = fmt.Errorf("send intro: %s %s", chatResp.Status, string(chatBodyRead))
+	}
+	if lastErr != nil {
+		return lastErr
 	}
 
 	// 3. Mark intro sent

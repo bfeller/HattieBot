@@ -19,7 +19,25 @@ use OCP\EventDispatcher\IEventListener;
 class ChatMessageSentListener implements IEventListener {
 
 	public function __construct() {
-		// No constructor dependencies - use \OC::$server for services
+		self::staticLog('ChatMessageSentListener::__construct() called');
+	}
+
+	public function handle(Event $event): void {
+		self::staticLog('ChatMessageSentListener::handle() ENTRY');
+		try {
+			$this->handleInternal($event);
+		} catch (\Throwable $e) {
+			$this->debugLog('handle exception: ' . $e->getMessage());
+			\OC::$server->getLogger()->warning('HattieBridge: ' . $e->getMessage());
+			// Do not rethrow - allow the chat message to be saved even if forwarding fails
+		}
+		self::staticLog('ChatMessageSentListener::handle() EXIT');
+	}
+
+	private static function staticLog(string $msg): void {
+		$base = (class_exists(\OC::class) && isset(\OC::$SERVERROOT)) ? \OC::$SERVERROOT : '/var/www/html';
+		$path = rtrim((string)$base, '/') . '/data/hattiebridge-debug.log';
+		@file_put_contents($path, date('c') . ' [LISTENER] ' . $msg . "\n", FILE_APPEND | LOCK_EX);
 	}
 
 	private function loadConfig(): array {
@@ -42,9 +60,10 @@ class ChatMessageSentListener implements IEventListener {
 		];
 	}
 
-	public function handle(Event $event): void {
-		$this->debugLog('handle called, event=' . ($event instanceof ChatMessageSentEvent ? 'ChatMessageSentEvent' : get_class($event)));
+	private function handleInternal(Event $event): void {
+		$this->debugLog('handleInternal: event=' . ($event instanceof ChatMessageSentEvent ? 'ChatMessageSentEvent' : get_class($event)));
 		if (!$event instanceof ChatMessageSentEvent) {
+			$this->debugLog('handleInternal: skip, not ChatMessageSentEvent');
 			return;
 		}
 
@@ -60,23 +79,35 @@ class ChatMessageSentListener implements IEventListener {
 
 		$room = $event->getRoom();
 		$comment = $event->getComment();
+		$this->debugLog('handleInternal: room=' . $room->getToken() . ' verb=' . $comment->getVerb());
 
 		// Skip non-comment messages (system messages, etc.)
 		if ($comment->getVerb() !== 'comment') {
+			$this->debugLog('handleInternal: skip, verb!==comment');
 			return;
 		}
 
 		// Skip if message is from Hattie user (avoid echo)
 		$actorType = $comment->getActorType();
 		$actorId = $comment->getActorId();
+		$this->debugLog('handleInternal: actor=' . $actorType . '/' . $actorId . ' hattie=' . $hattieUserId);
 		if ($actorType === Attendee::ACTOR_USERS && $actorId === $hattieUserId) {
+			$this->debugLog('handleInternal: skip, message from hattie (avoid echo)');
 			return;
 		}
 
 		// Check if Hattie user is a participant in this room
-		try {
-			$room->getParticipant($hattieUserId);
-		} catch (\OCA\Talk\Exceptions\ParticipantNotFoundException $e) {
+		// Try "users/hattie" first (Talk v4+ format), then "hattie"
+		$participant = null;
+		foreach ([Attendee::ACTOR_USERS . '/' . $hattieUserId, $hattieUserId] as $participantId) {
+			try {
+				$participant = $room->getParticipant($participantId);
+				break;
+			} catch (\OCA\Talk\Exceptions\ParticipantNotFoundException $e) {
+				// Fallback to next format
+			}
+		}
+		if ($participant === null) {
 			$this->debugLog('skip: user ' . $hattieUserId . ' not in room ' . $room->getToken());
 			return;
 		}
