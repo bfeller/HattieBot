@@ -1,6 +1,31 @@
+# Portainer CE does not support relative-path bind mounts when deploying from Git.
+# We use an init container to fetch scripts from GitHub into named volumes instead.
 version: '3.8'
 
 services:
+  nextcloud-init:
+    image: alpine:3.19
+    container_name: nextcloud-init
+    environment:
+      HATTIEBOT_GIT_REPO: ${HATTIEBOT_GIT_REPO:-https://github.com/bfeller/HattieBot}
+      HATTIEBOT_GIT_BRANCH: ${HATTIEBOT_GIT_BRANCH:-main}
+    volumes:
+      - nextcloud_post_install:/output/post-installation
+      - nextcloud_before_start:/output/before-starting
+      - nextcloud_hattiebridge_src:/output/hattiebridge
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "=> Fetching HattieBridge scripts from $${HATTIEBOT_GIT_REPO} ($${HATTIEBOT_GIT_BRANCH})..."
+        mkdir -p /tmp/repo
+        wget -qO- "$${HATTIEBOT_GIT_REPO}/archive/refs/heads/$${HATTIEBOT_GIT_BRANCH}.tar.gz" | tar -xz -C /tmp/repo --strip-components=1
+        cp /tmp/repo/docker/nextcloud/post-installation/99-hattiebridge.sh /output/post-installation/
+        cp /tmp/repo/docker/nextcloud/before-starting/99-hattiebridge-config.sh /output/before-starting/
+        cp -r /tmp/repo/docker/nextcloud/hattiebridge/* /output/hattiebridge/
+        chmod +x /output/post-installation/*.sh /output/before-starting/*.sh
+        echo "=> HattieBridge scripts fetched successfully"
+
   db:
     image: postgres:17-alpine
     container_name: nextcloud-db
@@ -24,6 +49,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      nextcloud-init:
+        condition: service_completed_successfully
     environment:
       NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER}
       NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD}
@@ -41,11 +68,9 @@ services:
     command: [ "apache2-foreground" ]
     volumes:
       - nextcloud_data:/var/www/html
-      # These mounts provide hooks that Nextcloud's official entrypoint will run automatically.
-      # Mount directories (not files) so contents are merged; avoids ghost-directory mount issues.
-      - ./docker/nextcloud/hattiebridge:/tmp/hattiebridge-src:ro
-      - ./docker/nextcloud/post-installation:/docker-entrypoint-hooks.d/post-installation:ro
-      - ./docker/nextcloud/before-starting:/docker-entrypoint-hooks.d/before-starting:ro
+      - nextcloud_hattiebridge_src:/tmp/hattiebridge-src:ro
+      - nextcloud_post_install:/docker-entrypoint-hooks.d/post-installation:ro
+      - nextcloud_before_start:/docker-entrypoint-hooks.d/before-starting:ro
     ports:
       - "8080:80"
 
@@ -104,4 +129,7 @@ services:
 volumes:
   nextcloud_db:
   nextcloud_data:
+  nextcloud_post_install:
+  nextcloud_before_start:
+  nextcloud_hattiebridge_src:
   hattiebot_data:
