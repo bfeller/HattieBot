@@ -306,6 +306,24 @@ Contributions are welcome. Open an issue or PR on [GitHub](https://github.com/bf
 
 ---
 
+## Updating Portainer Deployment
+
+If you are running HattieBot via Portainer and have updated the source code (e.g., via `git pull` or manual edits), you must rebuild the container to apply changes:
+
+1. **Terminal**:
+   ```bash
+   docker compose build hattiebot
+   docker compose up -d hattiebot
+   ```
+
+2. **Portainer UI**:
+   - Go to **Stacks** > **[Your Stack]** > **Editor**.
+   - If using a Git repository, ensure "Repository Reference" is correct.
+   - Click **Update the stack**.
+   - **Crucial**: If building from source (`build: context: .`), Portainer might not rebuild the image automatically unless the configuration changed. You may need to manually trigger a build or use the "Re-pull image and redeploy" toggle if using an external image registry. For local source builds, the CLI method above is most reliable.
+
+---
+
 ## License
 
 Add a `LICENSE` file to the repository root for your chosen license (e.g. MIT, Apache-2.0).

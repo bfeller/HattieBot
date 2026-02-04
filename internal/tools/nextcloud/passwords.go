@@ -61,6 +61,59 @@ func GetNextcloudSecret(cfg *config.Config, query string) (string, error) {
 	return "", fmt.Errorf("secret not found for query: %s", query)
 }
 
+// GetSecretValue searches for a password by exact label/title match and returns the password string.
+func GetSecretValue(cfg *config.Config, label string) (string, error) {
+	// API route: /api/1.0/password/list
+	baseURL := strings.TrimRight(cfg.NextcloudURL, "/")
+	apiURL := fmt.Sprintf("%s/index.php/apps/passwords/api/1.0/password/list", baseURL)
+
+	req, _ := http.NewRequest("GET", apiURL, nil)
+	req.SetBasicAuth(cfg.NextcloudBotUser, cfg.NextcloudBotAppPassword)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("OCS-APIRequest", "true")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+    if resp.StatusCode != 200 {
+        body, _ := io.ReadAll(resp.Body)
+        return "", fmt.Errorf("passwords API error %d: %s", resp.StatusCode, string(body))
+    }
+
+    var list []map[string]interface{}
+    if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+        return "", fmt.Errorf("parse error: %v", err)
+    }
+
+    // Exact match preference, then case-insensitive
+    for _, item := range list {
+        t, _ := item["label"].(string)
+        if t == "" { t, _ = item["title"].(string) }
+        
+        if t == label {
+            if pass, ok := item["password"].(string); ok {
+                return pass, nil
+            }
+        }
+    }
+    // Fallback case-insensitive
+    for _, item := range list {
+        t, _ := item["label"].(string)
+        if t == "" { t, _ = item["title"].(string) }
+        if strings.EqualFold(t, label) {
+             if pass, ok := item["password"].(string); ok {
+                return pass, nil
+            }
+        }
+    }
+
+	return "", fmt.Errorf("secret not found: %s", label)
+}
+
 // StoreSecret creates a new password and shares it with admin.
 // detailed session handshake is used.
 // If the Passwords App API fails (e.g. 404/500), it falls back to creating a secure text file and sharing it.

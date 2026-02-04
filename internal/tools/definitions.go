@@ -12,7 +12,9 @@ import (
 
 	"github.com/hattiebot/hattiebot/internal/config"
 	"github.com/hattiebot/hattiebot/internal/core"
+	"regexp"
 	"github.com/hattiebot/hattiebot/internal/gateway"
+	"github.com/hattiebot/hattiebot/internal/secrets"
 	"github.com/hattiebot/hattiebot/internal/health"
 	"github.com/hattiebot/hattiebot/internal/openrouter"
 	"github.com/hattiebot/hattiebot/internal/registry"
@@ -672,6 +674,7 @@ type Executor struct {
 	TokenBudget     int
 	Spawner         core.SubmindSpawner  // For spawning sub-minds
 	SubmindRegistry core.SubmindRegistry // For managing sub-minds
+	SecretStore     *secrets.MultiStore
 }
 
 func (e *Executor) SetSpawner(spawner core.SubmindSpawner) {
@@ -693,6 +696,48 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 	timeout := 2 * time.Minute
 	if name == "run_terminal_cmd" || name == "autohand_cli" || name == "spawn_submind" {
 		timeout = 15 * time.Minute
+	}
+
+	// Secret Resolution
+	// Look for {{secret:key}} and replace with value from SecretStore (default source: passwords)
+	if e.SecretStore != nil && strings.Contains(argsJSON, "{{secret:") {
+		re := regexp.MustCompile(`\{\{secret:([^}]+)\}\}`)
+		argsJSON = re.ReplaceAllStringFunc(argsJSON, func(match string) string {
+			key := re.FindStringSubmatch(match)[1]
+			// TODO: Support {{secret:source:key}} syntax? For now assume passwords app.
+			// If key starts with "env:", use env source.
+			source := "passwords"
+			if strings.HasPrefix(key, "env:") {
+				source = "env"
+				key = strings.TrimPrefix(key, "env:")
+			}
+			
+			val, err := e.SecretStore.GetSecret(source, key)
+			if err != nil {
+				// Don't leak error details to tool execution, just fail or leave placeholder?
+				// Better to fail execution if secret is missing.
+				// But we are inside ReplaceAllStringFunc, can't easily error out.
+				// We'll leave a marked error string so JSON unmarshal might fail or tool sees it.
+				// Or better: check for secrets BEFORE replacement loop?
+				return "ERROR_MISSING_SECRET" 
+			}
+			// Escape value for JSON string?
+			// If the secret contains quotes, it will break JSON if we just paste it.
+			// argsJSON is a JSON string. We are replacing a substring inside it.
+			// The secret is likely inside a JSON string value: "password": "{{secret:foo}}"
+			// So we need to JSON-escape the secret value.
+			b, _ := json.Marshal(val)
+			s := string(b)
+			// json.Marshal returns "value", including quotes. We need inner content.
+			if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+				return s[1 : len(s)-1]
+			}
+			return val
+		})
+		
+		if strings.Contains(argsJSON, "ERROR_MISSING_SECRET") {
+			return `{"error": "failed to resolve one or more secrets"}`, nil
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)

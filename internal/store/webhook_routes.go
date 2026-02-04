@@ -10,11 +10,16 @@ const webhookRoutesFile = "webhook_routes.json"
 
 // WebhookRoute defines a configurable webhook endpoint.
 type WebhookRoute struct {
-	Path        string `json:"path"`
-	ID          string `json:"id"`
+	Path         string `json:"path"`
+	ID           string `json:"id"`
 	SecretHeader string `json:"secret_header"`
-	SecretEnv   string `json:"secret_env"`
-	AuthType    string `json:"auth_type"` // "header" or "hmac_sha256"
+	SecretEnv    string `json:"secret_env"`
+	// SecretSource defines where to look for the secret: "env" (default), "passwords", or "disabled".
+	SecretSource string `json:"secret_source,omitempty"`
+	// SecretKey is the key to look up in the source (e.g. Nextcloud Passwords label).
+	// If empty and SecretSource is "passwords", SecretEnv is used as the key.
+	SecretKey    string `json:"secret_key,omitempty"`
+	AuthType     string `json:"auth_type"` // "header" or "hmac_sha256"
 }
 
 // LoadWebhookRoutes reads routes from $CONFIG_DIR/webhook_routes.json.

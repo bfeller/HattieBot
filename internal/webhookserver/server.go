@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hattiebot/hattiebot/internal/gateway"
+
+	"github.com/hattiebot/hattiebot/internal/secrets"
 	"github.com/hattiebot/hattiebot/internal/store"
 )
 
@@ -57,7 +59,9 @@ type Server struct {
 	HealthPath         string
 	WebhookTalkPath    string
 	ChatPath           string
+
 	ConfigDir          string // for dynamic webhook routes
+	SecretStore        *secrets.MultiStore
 }
 
 // Run starts the HTTP server and blocks.
@@ -227,9 +231,39 @@ func (s *Server) handleDynamicWebhook(w http.ResponseWriter, r *http.Request) {
 	if len(body) > maxWebhookBodySize {
 		body = body[:maxWebhookBodySize]
 	}
-	secret := os.Getenv(route.SecretEnv)
+	
+	// Secret Resolution (Fail Closed)
+	source := route.SecretSource
+	if source == "" {
+		source = "env"
+	}
+	key := route.SecretKey
+	if key == "" {
+		key = route.SecretEnv
+	}
+	
+	var secret string
+	if s.SecretStore != nil {
+		var sErr error
+		secret, sErr = s.SecretStore.GetSecret(source, key)
+		if sErr != nil {
+			log.Printf("[WebhookServer] dynamic webhook %s: failed to get secret from %s/%s: %v", path, source, key, sErr)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Fallback for backward compat if store not injected (though it should be)
+		if source == "env" {
+			secret = os.Getenv(key)
+		} else {
+			log.Printf("[WebhookServer] dynamic webhook %s: secret store missing, cannot fetch from %s", path, source)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	if secret == "" {
-		log.Printf("[WebhookServer] dynamic webhook %s: secret env %s not set", path, route.SecretEnv)
+		log.Printf("[WebhookServer] dynamic webhook %s: secret not found (source: %s, key: %s)", path, source, key)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}

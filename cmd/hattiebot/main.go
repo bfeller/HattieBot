@@ -30,6 +30,8 @@ import (
 	"github.com/hattiebot/hattiebot/internal/middleware"
 	"github.com/hattiebot/hattiebot/internal/openrouter"
 	"github.com/hattiebot/hattiebot/internal/scheduler"
+
+	"github.com/hattiebot/hattiebot/internal/secrets"
 	"github.com/hattiebot/hattiebot/internal/store"
 	"github.com/hattiebot/hattiebot/internal/tools"
 	"github.com/hattiebot/hattiebot/internal/tools/nextcloud"
@@ -371,6 +373,12 @@ func run(cfg *config.Config) error {
 		LogStore:        logStore,
 	}
 
+	// Initialize SecretStore
+	secretStore := secrets.NewMultiStore()
+	secretStore.Register("env", &secrets.EnvSecretStore{})
+	secretStore.Register("passwords", secrets.NewNextcloudSecretStore(cfg))
+
+
 	// Start scheduler background runner
 	schedRunner := scheduler.NewRunner(db)
 	schedRunner.ToolExecutor = executor // Wire executor for execute_tool action
@@ -418,11 +426,13 @@ func run(cfg *config.Config) error {
 				httpPort = n
 			}
 		}
+
 		webhookSrv := &webhookserver.Server{
 			Addr:               fmt.Sprintf(":%d", httpPort),
 			HattieBridgeSecret: cfg.HattieBridgeWebhookSecret,
 			PushIngress:        gw.PushIngress,
 			ConfigDir:          cfg.ConfigDir,
+			SecretStore:        secretStore,
 		}
 		defaultCh := "nextcloud_talk"
 		if cfg.DefaultChannel != "" {
@@ -448,6 +458,7 @@ func run(cfg *config.Config) error {
 	schedRunner.Router = router // Wire router so scheduler can deliver reminders proactively
 	if toolExec, ok := rawExecutor.(*tools.Executor); ok {
 		toolExec.Router = router // For notify_user tool
+		toolExec.SecretStore = secretStore
 	}
 	escalationMonitor := &scheduler.EscalationMonitor{
 		DB:     db,
