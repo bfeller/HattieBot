@@ -637,6 +637,22 @@ func BuiltinToolDefs() []openrouter.ToolDefinition {
 		{
 			Type: "function",
 			Function: openrouter.FunctionSpec{
+				Name:        "search_history",
+				Description: "Search recent conversation history/messages by keyword. Useful for recalling past decisions or details.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query": map[string]string{"type": "string", "description": "Keyword to search for"},
+						"limit": map[string]interface{}{"type": "integer", "description": "Max results (default 10)"},
+					},
+					"required": []string{"query"},
+				},
+			},
+			Policy: "safe",
+		},
+		{
+			Type: "function",
+			Function: openrouter.FunctionSpec{
 				Name:        "store_secret",
 				Description: "Store a new secret in Nextcloud Passwords app and share it with Admin.",
 				Parameters: map[string]interface{}{
@@ -876,6 +892,37 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 		}
 		b, _ := json.Marshal(results)
 		return string(b), nil
+	case "search_history":
+		var args struct {
+			Query string `json:"query"`
+			Limit int    `json:"limit"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return ErrJSON(err), nil
+		}
+		if args.Limit <= 0 {
+			args.Limit = 10
+		}
+		messages, err := e.DB.SearchMessages(ctx, args.Query, args.Limit)
+		if err != nil {
+			return ErrJSON(err), nil
+		}
+		// Return simplified list
+		type MsgSummary struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+			Time    string `json:"time"`
+		}
+		var summaries []MsgSummary
+		for _, m := range messages {
+			summaries = append(summaries, MsgSummary{
+				Role:    m.Role,
+				Content: m.Content,
+				Time:    m.CreatedAt.Format(time.RFC3339),
+			})
+		}
+		b, _ := json.Marshal(summaries)
+		return string(b), nil
 	case "run_sandboxed":
 		var args struct {
 			Image    string            `json:"image"`
@@ -1059,7 +1106,7 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) (string, 
 		if !filepath.IsAbs(binaryPath) && e.WorkspaceDir != "" {
 			binaryPath = filepath.Join(e.WorkspaceDir, filepath.Clean(binaryPath))
 		}
-		stdout, _, code, runErr := ExecuteRegisteredTool(ctx, binaryPath, "{}")
+		stdout, _, code, runErr := ExecuteRegisteredTool(ctx, binaryPath, "{}", nil)
 		if runErr != nil {
 			return ErrJSON(fmt.Errorf("tool contract test failed: %w", runErr)), nil
 		}
