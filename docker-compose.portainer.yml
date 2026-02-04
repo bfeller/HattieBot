@@ -42,10 +42,10 @@ services:
     volumes:
       - nextcloud_data:/var/www/html
       # These mounts provide hooks that Nextcloud's official entrypoint will run automatically.
-      # Path pivot: using docker/ directory to avoid ghost directories from prior deploys.
+      # Mount directories (not files) so contents are merged; avoids ghost-directory mount issues.
       - ./docker/nextcloud/hattiebridge:/tmp/hattiebridge-src:ro
-      - ./docker/nextcloud/hooks/post-install.sh:/docker-entrypoint-hooks.d/post-installation/99-hattiebridge.sh:ro
-      - ./docker/nextcloud/hooks/before-starting.sh:/docker-entrypoint-hooks.d/before-starting/99-hattiebridge-config.sh:ro
+      - ./docker/nextcloud/post-installation:/docker-entrypoint-hooks.d/post-installation:ro
+      - ./docker/nextcloud/before-starting:/docker-entrypoint-hooks.d/before-starting:ro
     ports:
       - "8080:80"
 
